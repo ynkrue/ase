@@ -101,18 +101,25 @@ template <typename T> void bc_chase(SolverHandle<T> *ws, T *B, T *d, T *e);
 // DC (divide-and-conquer tridiagonal eigensolver)
 // -----------------------------------------------------------------------------
 /**
- * @brief Tridiagonal divide-and-conquer eigensolve on the CPU (LAPACK *stedc).
+ * @brief GPU tridiagonal divide-and-conquer eigensolver.
  *
- * TODO
+ * Cuppen D&C with the eigenvector matrix Q resident in
+ * `evec` on the device throughout. The host runs only the O(m) deflation index
+ * logic per merge (dlaed2 port); secular roots (dlaed4/5/6 device port), weight
+ * fixup, eigenvector assembly, and the rank-1 update GEMMs all run on the GPU.
+ * Leaves ≤ 512 are solved by host with *stedc.
+ *
+ * Uses ws->M (Q2 gather) and ws->Sdc (secular delta matrix) as device scratch.
  *
  * @tparam T      float or double
- * @param[in]     ws    solver handle (provides n)
- * @param[in,out] d     diagonal
- * @param[in,out] e     sub-diagonal
- * @param[out]    eval  eigenvalues
- * @param[out]    evec  eigenvectorsp
+ * @param[in]     ws       solver handle
+ * @param[in,out] d        diagonal
+ * @param[in,out] e        sub-diagonal
+ * @param[out]    eval     eigenvalues
+ * @param[out]    evec     eigenvectors Q_d
+ * @param[in,out] scratch  device scratch ≥ n×n
  */
-template <typename T> void tridi_dc(SolverHandle<T> *ws, T *d, T *e, T *eval, T *evec);
+template <typename T> void tridi_dc(SolverHandle<T> *ws, T *d, T *e, T *eval, T *evec, T *scratch);
 
 // -----------------------------------------------------------------------------
 // BT (back-transform)

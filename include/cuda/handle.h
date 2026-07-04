@@ -84,8 +84,24 @@ template <typename T> struct SolverHandle {
     T *e;      ///< tridiagonal off-diagonal
     int *prog; ///< progress flag for BC
 
-    // D&C buffer
-    T *Sdc; ///< n*n - device rank-1 eigenvector matrix S (per merge, GEMM'd into evec)
+    // D&C buffers (Cuppen's algorithm on GPU)
+    T *Sdc;       ///< n*n - per-merge secular delta matrix
+    T *dc_z;      ///< coupling vector z extracted from Q rows
+    T *dc_dlamda; ///< non-deflated eigenvalues (sorted), laed4 poles
+    T *dc_w;      ///< deflation-adjusted z components (laed4 weights)
+    T *dc_wt;     ///< recomputed Gu-Eisenstat weights
+    T *dc_tau;    ///< per-root secular shift tau_j
+    T *dc_lam;    ///< per-root eigenvalue lambda_j
+    T *dc_cs;     ///< 2n - Givens (c,s) pairs from deflation
+    int *dc_org;  ///< per-root origin index (lambda_j = dlamda[org] + tau)
+    int *dc_indx; ///< column gather permutation (type-grouped)
+    int *dc_ixc;  ///< S row gather (indxc)
+    int *dc_ij;   ///< 2n - Givens column index pairs
+    int *dc_info; ///< laed4 failure flag
+    // pinned host mirrors for the small per-merge transfers
+    T *h_z, *h_dlamda, *h_w, *h_lam, *h_cs; // h_cs is 2n
+    int *h_indx, *h_ixc, *h_ij;             // h_ij is 2n
+    void *host_pin;                         ///< backing allocation for the pinned mirrors
 
     // back-transform buffers
     T *M; ///< ldu*n - back-transform working buffer (padded for bc_back kernel)

@@ -140,6 +140,8 @@ static std::vector<double> cusolver_evd(cusolverDnHandle_t h, const std::vector<
     cusolverDnParams_t params;
     CUSOLVER_CHECK(cusolverDnCreateParams(&params));
 
+    // return {};
+
     T *dA, *dW;
     int *info;
     CUDA_CHECK(cudaMalloc(&dA, (size_t)n * n * sizeof(T)));

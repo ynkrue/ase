@@ -38,7 +38,6 @@ cuev              public API: symm_eig_solve, SolverHandle, handle_alloc/free
 cuev::kernels     custom GPU kernel launchers (dbbr_*, bc_*, bt_*)
 cuev::cublas      type-dispatching cuBLAS wrappers — all take SolverHandle<T>*
 cuev::cusolver    workspace-aware cuSOLVER wrappers — all take SolverHandle<T>*
-cuev::mp          multi-GPU API
 ```
 
 `__global__` kernels live in anonymous namespaces inside their `.cu` files — never exported.
