@@ -50,7 +50,7 @@ void symm_eig_solve(T *A, int n, T *eval, T *evec, cudaStream_t stream, SolveTim
     if (timer) CUDA_CHECK(cudaEventRecord(e_bc, stream));
 
     // Stage 3: tridiagonal D&C
-    kernels::tridi_dc(&ws, ws.d, ws.e, eval, evec);
+    kernels::tridi_dc(&ws, ws.d, ws.e, eval, evec, A);
     if (timer) CUDA_CHECK(cudaEventRecord(e_dc, stream));
 
     // Stage 4: back-transform evec = Q_s · Q_b · Q_d
