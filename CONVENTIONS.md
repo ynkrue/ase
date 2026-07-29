@@ -1,4 +1,4 @@
-# cuEV — Coding Conventions
+# ASE — Coding Conventions
 
 ## File Headers
 
@@ -21,9 +21,9 @@ Every `.cu` and `.cuh` file begins with a Doxygen block:
 | Thing | Convention | Example |
 |---|---|---|
 | Device kernel (`__global__`) | `<prefix>_<op>_kernel` in anonymous namespace | `dbbr_syr2k_kernel` |
-| Host launcher | `<prefix>_<op>` in `cuev::kernels` | `dbbr_syr2k` |
-| cuBLAS wrapper | function name only in `cuev::cublas` | `cublas::gemm` |
-| cuSOLVER wrapper | function name only in `cuev::cusolver` | `cusolver::geqrf` |
+| Host launcher | `<prefix>_<op>` in `ase::kernels` | `dbbr_syr2k` |
+| cuBLAS wrapper | function name only in `ase::cublas` | `cublas::gemm` |
+| cuSOLVER wrapper | function name only in `ase::cusolver` | `cusolver::geqrf` |
 | Kernel prefixes | `dbbr_` band reduction, `bc_` bulge chasing + BC-Back, `bt_` back-transform | |
 | Device pointer (host code) | `d` prefix | `dA`, `d_eval` |
 | Host pointer | `h` prefix | `hA`, `h_eval` |
@@ -34,10 +34,10 @@ Every `.cu` and `.cuh` file begins with a Doxygen block:
 ## Namespaces
 
 ```
-cuev              public API: symm_eig_solve, SolverHandle, handle_alloc/free
-cuev::kernels     custom GPU kernel launchers (dbbr_*, bc_*, bt_*)
-cuev::cublas      type-dispatching cuBLAS wrappers — all take SolverHandle<T>*
-cuev::cusolver    workspace-aware cuSOLVER wrappers — all take SolverHandle<T>*
+ase               public API: symm_eig_solve, SolverHandle, handle_alloc/free
+ase::kernels      custom GPU kernel launchers (dbbr_*, bc_*, bt_*)
+ase::cublas       type-dispatching cuBLAS wrappers — all take SolverHandle<T>*
+ase::cusolver     workspace-aware cuSOLVER wrappers — all take SolverHandle<T>*
 ```
 
 `__global__` kernels live in anonymous namespaces inside their `.cu` files — never exported.

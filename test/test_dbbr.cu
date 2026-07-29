@@ -7,8 +7,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include "test.h"
 #include <algorithm>
 #include <cusolverDn.h>
@@ -53,7 +53,7 @@ template <typename T> static void panel_qr_case(int rows, int b, double tol) {
     const int n = rows; // standalone panel: lda = ws->n = rows
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
-    auto ws = cuev::handle_alloc<T>(n, b, b, stream);
+    auto ws = ase::handle_alloc<T>(n, b, b, stream);
 
     std::vector<T> A0(rows * b);
     fill_random(A0, 12345);
@@ -62,7 +62,7 @@ template <typename T> static void panel_qr_case(int rows, int b, double tol) {
     T *dV = nullptr;
     CUDA_CHECK(cudaMalloc(&dV, (size_t)rows * b * sizeof(T)));
 
-    cuev::kernels::dbbr_panel_qr(&ws, dA, dV, rows, b);
+    ase::kernels::dbbr_panel_qr(&ws, dA, dV, rows, b);
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     std::vector<T> Apk(rows * b), V(rows * b), Tm(b * b);
@@ -102,7 +102,7 @@ template <typename T> static void panel_qr_case(int rows, int b, double tol) {
 
     CUDA_CHECK(cudaFree(dA));
     CUDA_CHECK(cudaFree(dV));
-    cuev::handle_free(&ws);
+    ase::handle_free(&ws);
     CUDA_CHECK(cudaStreamDestroy(stream));
 }
 
@@ -111,14 +111,14 @@ template <typename T> static void panel_qr_case(int rows, int b, double tol) {
 template <typename T> static void band_reduce_case(int n, int nbw, int nk, double tol) {
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
-    auto ws = cuev::handle_alloc<T>(n, nbw, nk, stream);
+    auto ws = ase::handle_alloc<T>(n, nbw, nk, stream);
 
     std::vector<T> A0(n * n);
     fill_random(A0, 7);
     auto ev_ref = eig_cusolver(A0, n); // reference spectrum (lower triangle)
 
     T *dA = to_device(A0);
-    cuev::kernels::dbbr_reduce(&ws, dA, ws.B);
+    ase::kernels::dbbr_reduce(&ws, dA, ws.B);
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     std::vector<T> Ab(n * n);
@@ -139,7 +139,7 @@ template <typename T> static void band_reduce_case(int n, int nbw, int nk, doubl
     CHECK_LT(rel_eig, tol);
 
     CUDA_CHECK(cudaFree(dA));
-    cuev::handle_free(&ws);
+    ase::handle_free(&ws);
     CUDA_CHECK(cudaStreamDestroy(stream));
 }
 

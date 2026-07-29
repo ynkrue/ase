@@ -11,8 +11,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include "test.h"
 #include <cmath>
 #include <vector>
@@ -24,14 +24,14 @@ static void tridi_case_de(std::vector<T> d, std::vector<T> e, double res_tol, do
     const int n = (int)d.size();
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
-    auto ws = cuev::handle_alloc<T>(n, 32, 512, stream);
+    auto ws = ase::handle_alloc<T>(n, 32, 512, stream);
 
     T *dd = to_device(d), *de = to_device(e), *deval, *devec, *dscr;
     CUDA_CHECK(cudaMalloc(&deval, n * sizeof(T)));
     CUDA_CHECK(cudaMalloc(&devec, (size_t)n * n * sizeof(T)));
     CUDA_CHECK(cudaMalloc(&dscr, (size_t)n * n * sizeof(T)));
 
-    cuev::kernels::tridi_dc(&ws, dd, de, deval, devec, dscr);
+    ase::kernels::tridi_dc(&ws, dd, de, deval, devec, dscr);
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     std::vector<T> w(n), V((size_t)n * n);
@@ -69,7 +69,7 @@ static void tridi_case_de(std::vector<T> d, std::vector<T> e, double res_tol, do
     CUDA_CHECK(cudaFree(deval));
     CUDA_CHECK(cudaFree(devec));
     CUDA_CHECK(cudaFree(dscr));
-    cuev::handle_free(&ws);
+    ase::handle_free(&ws);
     CUDA_CHECK(cudaStreamDestroy(stream));
 }
 

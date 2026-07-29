@@ -7,8 +7,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include <type_traits>
 
 // =============================================================================
@@ -110,7 +110,7 @@ template <typename T> __global__ void dbbr_larft(const T *G, const T *tau, T *Tr
 
 } // namespace
 
-namespace cuev {
+namespace ase {
 namespace kernels {
 
 template <typename T> void dbbr_pack(SolverHandle<T> *ws, const T *A, T *Bp, int n, int b) {
@@ -240,4 +240,4 @@ INSTANTIATE(double)
 #undef INSTANTIATE
 
 } // namespace kernels
-} // namespace cuev
+} // namespace ase

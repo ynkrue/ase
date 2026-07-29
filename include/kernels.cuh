@@ -1,11 +1,11 @@
 /**
  * @file   kernels.cuh
- * @brief  Custom kernel launchers and cuBLAS/cuSOLVER wrappers for cuEV.
+ * @brief  Custom kernel launchers and cuBLAS/cuSOLVER wrappers for ASE.
  *
  * Three sections:
- *   cuev::kernels   Custom GPU kernel launchers (dbbr_*, bc_*, bt_*)
- *   cuev::cublas    Type-dispatching cuBLAS wrappers  — all take SolverHandle<T>*
- *   cuev::cusolver  Type-dispatching cuSOLVER wrappers — all take SolverHandle<T>*
+ *   ase::kernels   Custom GPU kernel launchers (dbbr_*, bc_*, bt_*)
+ *   ase::cublas    Type-dispatching cuBLAS wrappers  — all take SolverHandle<T>*
+ *   ase::cusolver  Type-dispatching cuSOLVER wrappers — all take SolverHandle<T>*
  *
  * All matrices are column-major. T is float or double throughout.
  *
@@ -15,15 +15,15 @@
 
 #pragma once
 #include "common.h"
-#include "cuda/handle.h"
+#include "handle.h"
 #include <cublas_v2.h>
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
 
-namespace cuev {
+namespace ase {
 
 // =============================================================================
-// cuev::kernels — custom GPU kernel launchers
+// ase::kernels — custom GPU kernel launchers
 // =============================================================================
 namespace kernels {
 
@@ -56,7 +56,7 @@ template <typename T> void dbbr_pack(SolverHandle<T> *ws, const T *A, T *B, int 
  *                                   and T = upper-triangular correction.
  *
  * @tparam T      float or double
- * @param[in, out] ws   solver handle (cusolver, geqrf scratch, tau, Tri)
+ * @param[in,out]  ws   solver handle (cusolver, geqrf scratch, tau, Tri)
  * @param[in,out] A     rows × b panel into the working matrix upper triangle ← R,
  *                      strictly-lower ← packed Householder vectors
  * @param[out]    Y     rows × b reflectors (panel of ws->Y)
@@ -148,6 +148,8 @@ void back_transform(SolverHandle<T> *ws, const T *Y, const T *W, const T *U, T *
 
 /**
  * @brief BC-Back factor application: M ← Q_b · M (exposed for stage testing).
+ * @tparam T      float or double
+ * @param[in]     ws  solver handle
  * @param[in]     U   BC reflectors, ldu×n column-major
  * @param[in,out] M   padded working buffer ws->M, ldu×n (padding rows below n must be zero)
  */
@@ -155,6 +157,8 @@ template <typename T> void bc_back(SolverHandle<T> *ws, const T *U, T *M);
 
 /**
  * @brief SBR-Back factor application: M ← Q_s · M (exposed for stage testing).
+ * @tparam T      float or double
+ * @param[in]     ws  solver handle
  * @param[in]     Y   DBBR reflectors, n×n column-major (ld=n)
  * @param[in]     W   SBR-Back companion W = Y·T, n×n column-major (ld=n)
  * @param[in,out] M   n×n working buffer (ld=ws->ldu)
@@ -164,12 +168,12 @@ template <typename T> void sbr_back(SolverHandle<T> *ws, const T *Y, const T *W,
 } // namespace kernels
 
 // =============================================================================
-// cuBLAS dispatching wrappers  (cuev::cublas)
+// cuBLAS dispatching wrappers  (ase::cublas)
 // =============================================================================
 namespace cublas {
 
 /**
- * @brief General matrix-matrix multiplication (GEMM). C ← α·op(A)·op(B) + β·C
+ * @brief General matrix-matrix multiplication (GEMM). C ← α·op(A)·op(B) + β·C.
  *
  * op(X) = X, Xᵀ, or Xᴴ depending on the value of transX.  C, A, B are column-major.
  *
@@ -195,7 +199,7 @@ void gemm(SolverHandle<T> *ws, cublasOperation_t transa, cublasOperation_t trans
           int ldc);
 
 /**
- * @brief Symmetric matrix-matrix multiplication: C ← α·A·B + β·C (or B·A if side=right)
+ * @brief Symmetric matrix-matrix multiplication: C ← α·A·B + β·C (or B·A if side=right).
  *
  * A is symmetric; only the @p uplo triangle is referenced. B and C are column-major.
  *
@@ -219,7 +223,7 @@ void symm(SolverHandle<T> *ws, cublasSideMode_t side, cublasFillMode_t uplo, int
           const T *alpha, const T *A, int lda, const T *B, int ldb, const T *beta, T *C, int ldc);
 
 /**
- * @brief Symmetric rank-k update: C ← α·op(A)·op(A)ᵀ + β·C
+ * @brief Symmetric rank-k update: C ← α·op(A)·op(A)ᵀ + β·C.
  *
  * Only the @p uplo triangle of C is referenced/written.
  *
@@ -241,7 +245,7 @@ void syrk(SolverHandle<T> *ws, cublasFillMode_t uplo, cublasOperation_t trans, i
           const T *alpha, const T *A, int lda, const T *beta, T *C, int ldc);
 
 /**
- * @brief Symmetric rank-2k update: C ← α·op(A)·op(B)ᵀ + α·op(B)·op(A)ᵀ + β·C
+ * @brief Symmetric rank-2k update: C ← α·op(A)·op(B)ᵀ + α·op(B)·op(A)ᵀ + β·C.
  *
  * Only the @p uplo triangle of C is referenced/written.
  * Used in DBBR trailing update: C = A, op(A)=Z, op(B)=Y, α=-1, β=1.
@@ -268,7 +272,7 @@ void syr2k(SolverHandle<T> *ws, cublasFillMode_t uplo, cublasOperation_t trans, 
 } // namespace cublas
 
 // =============================================================================
-// cuSOLVER type-dispatching wrappers  (cuev::cusolver)
+// cuSOLVER type-dispatching wrappers  (ase::cusolver)
 // =============================================================================
 namespace cusolver {
 
@@ -289,4 +293,4 @@ void geqrf(SolverHandle<T> *ws, int m, int n, T *A, int lda, T *tau, cudaStream_
 
 } // namespace cusolver
 
-} // namespace cuev
+} // namespace ase

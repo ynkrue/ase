@@ -11,11 +11,14 @@
  *
  * @author  Yannik Rüfenacht
  * @date    2026-06
+ *
+ * @author  Yannik Rüfenacht
+ * @date    2026-06
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include "test.h"
 #include <algorithm>
 #include <cmath>
@@ -74,7 +77,7 @@ static double resid_XMT(const std::vector<T> &X, const std::vector<T> &M, const 
 
 // Materialize an n×n factor by applying `apply` to the identity stored in ws.M (ld=ldu, padded).
 template <typename T, typename F>
-static std::vector<T> materialize(cuev::SolverHandle<T> &ws, int n, F apply) {
+static std::vector<T> materialize(ase::SolverHandle<T> &ws, int n, F apply) {
     const int ldu = ws.ldu;
     std::vector<T> hM((size_t)ldu * n, T(0));
     for (int i = 0; i < n; ++i)
@@ -90,7 +93,7 @@ template <typename T> static void bt_case(int n, double tol) {
     const int nbw = 32, nk = 128;
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
-    auto ws = cuev::handle_alloc<T>(n, nbw, nk, stream);
+    auto ws = ase::handle_alloc<T>(n, nbw, nk, stream);
 
     std::vector<T> A0(n * n);
     fill_random(A0, 7);
@@ -98,14 +101,14 @@ template <typename T> static void bt_case(int n, double tol) {
 
     // Stage 1: DBBR  (A → band in A's lower triangle; reflectors in ws.Y / ws.W)
     T *dA = to_device(A0);
-    cuev::kernels::dbbr_reduce(&ws, dA, ws.B);
+    ase::kernels::dbbr_reduce(&ws, dA, ws.B);
     CUDA_CHECK(cudaStreamSynchronize(stream));
     std::vector<T> Aband(n * n);
     to_host(Aband, dA);
     auto Band = band_dense(Aband, n, nbw);
 
     // Stage 2: BC  (band → tridiag d,e; reflectors in ws.U)
-    cuev::kernels::bc_chase(&ws, ws.B, ws.d, ws.e);
+    ase::kernels::bc_chase(&ws, ws.B, ws.d, ws.e);
     CUDA_CHECK(cudaStreamSynchronize(stream));
     std::vector<T> d(n), e(n);
     to_host(d, ws.d);
@@ -113,13 +116,13 @@ template <typename T> static void bt_case(int n, double tol) {
     auto Tri = tridiag_dense(d, e, n);
 
     // --- Q_s isolation:  Q_sᵀ·A·Q_s == Band ---
-    auto Qs = materialize<T>(ws, n, [&](T *M) { cuev::kernels::sbr_back(&ws, ws.Y, ws.W, M); });
+    auto Qs = materialize<T>(ws, n, [&](T *M) { ase::kernels::sbr_back(&ws, ws.Y, ws.W, M); });
     double qs_T = resid_TMX(Qs, A, Band, n, ws.ldu); // expects Q_s
     double qs_X = resid_XMT(Qs, A, Band, n, ws.ldu); // expects Q_sᵀ
     printf("    Q_s:  ‖Q_sᵀ·A·Q_s−B‖=%.2e   ‖Q_s·A·Q_sᵀ−B‖=%.2e\n", qs_T, qs_X);
 
     // --- Q_b isolation:  Q_bᵀ·Band·Q_b == Tridiag ---
-    auto Qb = materialize<T>(ws, n, [&](T *M) { cuev::kernels::bc_back(&ws, ws.U, M); });
+    auto Qb = materialize<T>(ws, n, [&](T *M) { ase::kernels::bc_back(&ws, ws.U, M); });
     double qb_T = resid_TMX(Qb, Band, Tri, n, ws.ldu);
     double qb_X = resid_XMT(Qb, Band, Tri, n, ws.ldu);
     printf("    Q_b:  ‖Q_bᵀ·B·Q_b−T‖=%.2e   ‖Q_b·B·Q_bᵀ−T‖=%.2e\n", qb_T, qb_X);
@@ -128,7 +131,7 @@ template <typename T> static void bt_case(int n, double tol) {
     CHECK_LT(std::min(qb_T, qb_X), tol);
 
     CUDA_CHECK(cudaFree(dA));
-    cuev::handle_free(&ws);
+    ase::handle_free(&ws);
     CUDA_CHECK(cudaStreamDestroy(stream));
 }
 

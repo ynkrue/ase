@@ -10,8 +10,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include "test.h"
 #include <algorithm>
 #include <cmath>
@@ -55,15 +55,15 @@ template <typename T> static std::vector<T> eig_cusolver(const std::vector<T> &h
 template <typename T> static void bulge_case(int n, int nbw, int nk, double tol) {
     cudaStream_t stream;
     CUDA_CHECK(cudaStreamCreate(&stream));
-    auto ws = cuev::handle_alloc<T>(n, nbw, nk, stream);
+    auto ws = ase::handle_alloc<T>(n, nbw, nk, stream);
 
     std::vector<T> A0(n * n);
     fill_random(A0, 7);
     auto ev_ref = eig_cusolver(A0, n);
 
     T *dA = to_device(A0);
-    cuev::kernels::dbbr_reduce(&ws, dA, ws.B);
-    cuev::kernels::bc_chase(&ws, ws.B, ws.d, ws.e);
+    ase::kernels::dbbr_reduce(&ws, dA, ws.B);
+    ase::kernels::bc_chase(&ws, ws.B, ws.d, ws.e);
     CUDA_CHECK(cudaStreamSynchronize(stream));
 
     std::vector<T> d(n), e(n);
@@ -87,7 +87,7 @@ template <typename T> static void bulge_case(int n, int nbw, int nk, double tol)
     CHECK_LT(maxdiff / range, tol);
 
     CUDA_CHECK(cudaFree(dA));
-    cuev::handle_free(&ws);
+    ase::handle_free(&ws);
     CUDA_CHECK(cudaStreamDestroy(stream));
 }
 

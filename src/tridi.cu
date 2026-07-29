@@ -6,6 +6,8 @@
  * device-resident in `evec` for the whole solve. Per merge, only O(m) vectors
  * (z, d, permutations) cross PCIe; every super-linear cost runs on the GPU:
  *
+ * @author  Yannik Rüfenacht
+ * @date    2026-06
  *   host   deflation index logic     line-by-line port of dlaed2 (O(m), branchy)
  *   device Givens rotations + column gather (deflation bookkeeping on Q)
  *   device secular roots             dlaed4/dlaed5/dlaed6 ported to a __device__
@@ -26,8 +28,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include <algorithm>
 #include <cmath>
 #include <cstdio>
@@ -849,7 +851,7 @@ template <typename T> __global__ void dc_set_one_kernel(T *q) {
 
 } // namespace
 
-namespace cuev {
+namespace ase {
 namespace kernels {
 
 namespace {
@@ -1369,4 +1371,4 @@ INSTANTIATE(double)
 #undef INSTANTIATE
 
 } // namespace kernels
-} // namespace cuev
+} // namespace ase

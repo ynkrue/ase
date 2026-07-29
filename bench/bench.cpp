@@ -1,6 +1,6 @@
 /**
  * @file   bench.cpp
- * @brief  Benchmark cuev::symm_eig_solve vs cuSOLVER dsyevd / ssyevd.
+ * @brief  Benchmark ase::symm_eig_solve vs cuSOLVER dsyevd / ssyevd.
  *
  * Usage: cuBench [--n N] [--warmup W] [--iters I]
  *
@@ -9,8 +9,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuev.h"
+#include "handle.h"
+#include "ase.h"
 #include <cstdio>
 #include <cstring>
 #include <cublas_v2.h>
@@ -109,10 +109,10 @@ static float bench_cusolver(cusolverDnHandle_t handle, int n, int warmup, int it
 }
 
 // =============================================================================
-// cuev
+// ase
 // =============================================================================
 
-template <typename T> static float bench_cuev(int n, int warmup, int iters, cudaStream_t stream) {
+template <typename T> static float bench_ase(int n, int warmup, int iters, cudaStream_t stream) {
     std::vector<T> hA(n * n);
     fill_symmetric(hA, n);
 
@@ -123,7 +123,7 @@ template <typename T> static float bench_cuev(int n, int warmup, int iters, cuda
 
     auto run = [&] {
         CUDA_CHECK(cudaMemcpy(dA, hA.data(), n * n * sizeof(T), cudaMemcpyHostToDevice));
-        cuev::symm_eig_solve<T>(dA, n, d_eval, d_evec, stream);
+        ase::symm_eig_solve<T>(dA, n, d_eval, d_evec, stream);
     };
 
     for (int i = 0; i < warmup; ++i)
@@ -155,14 +155,14 @@ static void run_suite(cusolverDnHandle_t cusolver, int n, int warmup, int iters,
     double flops = 4.0 / 3.0 * (double)n * n * n;
 
     float ms_ref = bench_cusolver<T>(cusolver, n, warmup, iters, stream);
-    float ms_cuev = bench_cuev<T>(n, warmup, iters, stream);
+    float ms_ase = bench_ase<T>(n, warmup, iters, stream);
 
     printf("  %-28s  %8.3f ms   %6.3f TFLOP/s\n",
            std::is_same_v<T, float> ? "cusolver_ssyevd" : "cusolver_dsyevd", ms_ref,
            flops / (ms_ref * 1e-3) / 1e12);
     printf("  %-28s  %8.3f ms   %6.3f TFLOP/s\n",
-           std::is_same_v<T, float> ? "cuev_symm_eig_solve<float>" : "cuev_symm_eig_solve<double>",
-           ms_cuev, flops / (ms_cuev * 1e-3) / 1e12);
+           std::is_same_v<T, float> ? "ase_symm_eig_solve<float>" : "ase_symm_eig_solve<double>",
+           ms_ase, flops / (ms_ase * 1e-3) / 1e12);
     printf("\n");
 }
 

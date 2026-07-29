@@ -1,6 +1,6 @@
 /**
  * @file   test.h
- * @brief  Minimal header-only test framework for cuEV — colored, tolerance-based.
+ * @brief  Minimal header-only test framework for ASE — colored, tolerance-based.
  *
  * GoogleTest-flavoured but tiny:
  *   TEST(suite, name) { ... CHECK_LT(residual, tol); }
@@ -8,6 +8,9 @@
  *
  * Plus reusable host/device helpers (random fill, Frobenius norms, naive
  * column-major gemm, device round-trip).
+ *
+ * @author  Yannik Rüfenacht
+ * @date    2026-06
  *
  * @author  Yannik Rüfenacht
  * @date    2026-06

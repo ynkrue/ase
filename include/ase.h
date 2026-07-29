@@ -1,6 +1,6 @@
 /**
- * @file   cuev.h
- * @brief  Public API for cuEV — single-GPU symmetric dense eigensolver.
+ * @file   ase.h
+ * @brief  Public API for ASE — single-GPU symmetric dense eigensolver.
  *
  * TODO: add description
  *
@@ -9,10 +9,10 @@
  */
 
 #pragma once
-#include "cuda/handle.h"
+#include "handle.h"
 #include <cuda_runtime.h>
 
-namespace cuev {
+namespace ase {
 
 /**
  * @brief Compute all eigenvalues and eigenvectors of a real symmetric matrix.
@@ -32,4 +32,4 @@ template <typename T>
 void symm_eig_solve(T *A, int n, T *eval, T *evec, cudaStream_t stream,
                     SolveTimer *timer = nullptr);
 
-} // namespace cuev
+} // namespace ase

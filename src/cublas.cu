@@ -1,15 +1,15 @@
 /**
  * @file   cublas.cu
- * @brief  Type-dispatching cuBLAS wrappers — cuev::cublas namespace.
+ * @brief  Type-dispatching cuBLAS wrappers — ase::cublas namespace.
  *
  * @author Yannik Rüfenacht
  * @date   2026-06
  */
 
-#include "cuda/kernels.cuh"
+#include "kernels.cuh"
 #include <type_traits>
 
-namespace cuev {
+namespace ase {
 namespace cublas {
 
 template <typename T>
@@ -73,4 +73,4 @@ INSTANTIATE(double)
 #undef INSTANTIATE
 
 } // namespace cublas
-} // namespace cuev
+} // namespace ase

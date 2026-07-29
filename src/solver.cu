@@ -3,16 +3,16 @@
  * @brief  2-stage tridiagonalization eigensolver orchestration — single GPU.
  *
  * Pipeline: DBBR → bulge chasing → D&C (tridiagonal) → back-transform.
- * Public entry point: cuev::symm_eig_solve<T>(A, n, eval, evec, stream).
+ * Public entry point: ase::symm_eig_solve<T>(A, n, eval, evec, stream).
  *
  * @author  Yannik Rüfenacht
  * @date    2026-06
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
-#include "cuev.h"
+#include "handle.h"
+#include "kernels.cuh"
+#include "ase.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -20,7 +20,7 @@
 #include <cusolverDn.h>
 #include <type_traits>
 
-namespace cuev {
+namespace ase {
 
 template <typename T>
 void symm_eig_solve(T *A, int n, T *eval, T *evec, cudaStream_t stream, SolveTimer *timer) {
@@ -77,4 +77,4 @@ void symm_eig_solve(T *A, int n, T *eval, T *evec, cudaStream_t stream, SolveTim
 // =============================================================================
 template void symm_eig_solve<float>(float *, int, float *, float *, cudaStream_t, SolveTimer *);
 template void symm_eig_solve<double>(double *, int, double *, double *, cudaStream_t, SolveTimer *);
-} // namespace cuev
+} // namespace ase

@@ -6,6 +6,9 @@
  *   bc_pack   full-storage band → packed band, 2b rows (extra rows hold the bulge)
  *   bc_chase  packed band → tridiagonal (d, e)
  *
+ * @author  Yannik Rüfenacht
+ * @date    2026-06
+ *
  * The chase applies a Householder per column: H·A·H on the working window,
  * eliminating one column's sub-band and spilling a bulge just below the
  * band, where it is chased down by b each hop.
@@ -15,8 +18,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include <algorithm>
 
 // =============================================================================
@@ -225,7 +228,7 @@ template <typename T> __global__ void bc_extract_kernel(const T *B, T *d, T *e, 
 
 } // namespace
 
-namespace cuev {
+namespace ase {
 namespace kernels {
 
 template <typename T> void bc_chase(SolverHandle<T> *ws, T *B, T *d, T *e) {
@@ -255,4 +258,4 @@ INSTANTIATE(double)
 #undef INSTANTIATE
 
 } // namespace kernels
-} // namespace cuev
+} // namespace ase

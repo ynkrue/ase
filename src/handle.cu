@@ -7,11 +7,11 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
+#include "handle.h"
 #include <algorithm>
 #include <type_traits>
 
-namespace cuev {
+namespace ase {
 
 template <typename T> SolverHandle<T> handle_alloc(int n, int nbw, int nk, cudaStream_t stream) {
     SolverHandle<T> ws{};
@@ -160,4 +160,4 @@ template SolverHandle<double> handle_alloc<double>(int, int, int, cudaStream_t);
 template void handle_free<float>(SolverHandle<float> *);
 template void handle_free<double>(SolverHandle<double> *);
 
-} // namespace cuev
+} // namespace ase

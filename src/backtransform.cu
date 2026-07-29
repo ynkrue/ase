@@ -7,6 +7,9 @@
  * runs in the padded buffer ws->M (ldu rows × n): load Q_d, apply Q_b then Q_s in place, copy
  * back. Applying the reflectors to Q_d directly.
  *
+ * @author  Yannik Rüfenacht
+ * @date    2026-06
+ *
  *   BC-Back  (Q_b): bulge-chasing reflectors in U (column = sweep, padded ldu, unit w).
  *   SBR-Back (Q_s): DBBR WY block reflectors (I − W·Yᵀ) per panel, from W and Y.
  *
@@ -20,8 +23,8 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include <algorithm>
 
 // =============================================================================
@@ -211,7 +214,8 @@ __global__ void bc_back_kernel(int n, int cols, int extra, int nsweeps, int last
 
 } // namespace
 
-namespace cuev {
+/// @cond INTERNAL
+namespace ase {
 namespace kernels {
 
 namespace {
@@ -246,12 +250,12 @@ void bc_back_launch(SolverHandle<T> *ws, const T *U, T *M) {
 
 } // namespace
 
-/// BC-Back: M ← Q_b · M, in place on the padded buffer M (ldu×n, padding rows zeroed).
-///
-/// Geometry tuned on A100-80GB (fp64): PT=8 (256-row window), UTILE=64, 16 warps, 2
-/// columns/warp — 5.7 Tflop/s at n=32k (59% of fp64 peak; sweep results in git history).
-/// More warps/columns hit the 163 KB shared or 64K register ceiling; smaller UTILE raises
-/// the (WIN+UTILE)/UTILE traffic multiplier and loses more than the occupancy gain.
+// BC-Back: M ← Q_b · M, in place on the padded buffer M (ldu×n, padding rows zeroed).
+//
+// Geometry tuned on A100-80GB (fp64): PT=8 (256-row window), UTILE=64, 16 warps, 2
+// columns/warp — 5.7 Tflop/s at n=32k (59% of fp64 peak; sweep results in git history).
+// More warps/columns hit the 163 KB shared or 64K register ceiling; smaller UTILE raises
+// the (WIN+UTILE)/UTILE traffic multiplier and loses more than the occupancy gain.
 template <typename T> void bc_back(SolverHandle<T> *ws, const T *U, T *M) {
     bc_back_launch<T, 8, 64, 16, 2>(ws, U, M);
 }
@@ -337,4 +341,5 @@ INSTANTIATE(double)
 #undef INSTANTIATE
 
 } // namespace kernels
-} // namespace cuev
+} // namespace ase
+/// @endcond

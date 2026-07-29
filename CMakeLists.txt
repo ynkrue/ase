@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.25)
-project(cuEV LANGUAGES CXX CUDA)
+project(ASE LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CUDA_STANDARD 17)
@@ -16,90 +16,90 @@ endif()
 # =============================================================================
 # Options
 # =============================================================================
-option(CUEV_ENABLE_OMP    "Multithreaded BLAS/LAPACK"          OFF)
-option(CUEV_ENABLE_TESTS  "Build tests"                         ON)
-option(CUEV_ENABLE_BENCH  "Build benchmarks"                    ON)
-option(CUEV_BUILD_DOCS    "Build Doxygen documentation"        OFF)
+option(ASE_ENABLE_OMP    "Multithreaded BLAS/LAPACK"          OFF)
+option(ASE_ENABLE_TESTS  "Build tests"                         ON)
+option(ASE_ENABLE_BENCH  "Build benchmarks"                    ON)
+option(ASE_BUILD_DOCS    "Build Doxygen documentation"        OFF)
 
 # =============================================================================
 # Dependencies
 # =============================================================================
 find_package(CUDAToolkit REQUIRED)
 # use multithreaded BLAS/LAPACK
-add_library(cuev_lapack INTERFACE)
-if(CUEV_ENABLE_OMP)
+add_library(ase_lapack INTERFACE)
+if(ASE_ENABLE_OMP)
   set(MKL_INTERFACE lp64)
   set(MKL_THREADING gnu_thread)
   find_package(MKL CONFIG)
 endif()
 if(MKL_FOUND)
-  message(STATUS "cuev_lapack: GNU-OpenMP threaded MKL")
-  target_link_libraries(cuev_lapack INTERFACE MKL::MKL)
+  message(STATUS "ase_lapack: GNU-OpenMP threaded MKL")
+  target_link_libraries(ase_lapack INTERFACE MKL::MKL)
 else()
-  if(CUEV_ENABLE_OMP)
-    message(WARNING "CUEV_ENABLE_OMP set but MKL not found; falling back to plain LAPACK")
+  if(ASE_ENABLE_OMP)
+    message(WARNING "ASE_ENABLE_OMP set but MKL not found; falling back to plain LAPACK")
   endif()
   find_package(LAPACK REQUIRED)
-  target_link_libraries(cuev_lapack INTERFACE LAPACK::LAPACK)
+  target_link_libraries(ase_lapack INTERFACE LAPACK::LAPACK)
 endif()
 
 # =============================================================================
-# cuev — single-GPU library
+# ase — single-GPU symmetric eigensolver library
 # =============================================================================
-add_library(cuev SHARED
-  src/cuda/handle.cu
-  src/cuda/cublas.cu
-  src/cuda/cusolver.cu
-  src/cuda/dbbr.cu
-  src/cuda/bulge.cu
-  src/cuda/tridi.cu
-  src/cuda/backtransform.cu
-  src/cuda/solver.cu
+add_library(ase SHARED
+  src/handle.cu
+  src/cublas.cu
+  src/cusolver.cu
+  src/dbbr.cu
+  src/bulge.cu
+  src/tridi.cu
+  src/backtransform.cu
+  src/solver.cu
 )
-target_include_directories(cuev PUBLIC include)
-target_link_libraries(cuev PUBLIC CUDA::cublas CUDA::cusolver cuev_lapack)
-set_target_properties(cuev PROPERTIES
+target_include_directories(ase PUBLIC include)
+target_link_libraries(ase PUBLIC CUDA::cublas CUDA::cusolver ase_lapack)
+set_target_properties(ase PROPERTIES
   CUDA_SEPARABLE_COMPILATION ON
   POSITION_INDEPENDENT_CODE  ON)
 # OpenMP for the host-side D&C merge loops (secular roots / eigenvector recon).
 find_package(OpenMP)
 if(OpenMP_CXX_FOUND)
-  target_link_libraries(cuev PUBLIC OpenMP::OpenMP_CXX)
-  target_compile_options(cuev PRIVATE
+  target_link_libraries(ase PUBLIC OpenMP::OpenMP_CXX)
+  target_compile_options(ase PRIVATE
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>)
 endif()
 
 # =============================================================================
 # Benchmarks
 # =============================================================================
-if(CUEV_ENABLE_BENCH)
-  add_executable(cuBench bench/bench.cpp)
-  target_link_libraries(cuBench PRIVATE cuev CUDA::cudart CUDA::cublas CUDA::cusolver)
-  add_executable(cuBenchSolver bench/bench_solver.cpp)
-  target_link_libraries(cuBenchSolver PRIVATE cuev CUDA::cudart CUDA::cublas CUDA::cusolver)
+if(ASE_ENABLE_BENCH)
+  add_executable(ase_bench bench/bench.cpp)
+  target_link_libraries(ase_bench PRIVATE ase CUDA::cudart CUDA::cublas CUDA::cusolver)
+  add_executable(ase_bench_solver bench/bench_solver.cpp)
+  target_link_libraries(ase_bench_solver PRIVATE ase CUDA::cudart CUDA::cublas CUDA::cusolver)
 endif()
 
 # =============================================================================
 # Tests
 # =============================================================================
-if(CUEV_ENABLE_TESTS)
-  add_executable(cuTest
-    test/cuda/test_dbbr.cu
-    test/cuda/test_bulge.cu
-    test/cuda/test_backtransform.cu
-    test/cuda/test_tridi.cu
+if(ASE_ENABLE_TESTS)
+  add_executable(ase_test
+    test/test_dbbr.cu
+    test/test_bulge.cu
+    test/test_backtransform.cu
+    test/test_tridi.cu
   )
-  target_link_libraries(cuTest PRIVATE cuev CUDA::cudart CUDA::cublas CUDA::cusolver)
-  set_target_properties(cuTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  target_link_libraries(ase_test PRIVATE ase CUDA::cudart CUDA::cublas CUDA::cusolver)
+  set_target_properties(ase_test PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
 endif()
 
 # =============================================================================
 # Doxygen
 # =============================================================================
-if(CUEV_BUILD_DOCS)
+if(ASE_BUILD_DOCS)
   find_package(Doxygen QUIET OPTIONAL_COMPONENTS dot)
   if(DOXYGEN_FOUND)
-    set(DOXYGEN_PROJECT_NAME        "cuEV")
+    set(DOXYGEN_PROJECT_NAME        "ASE")
     set(DOXYGEN_PROJECT_BRIEF       "CUDA symmetric dense eigensolver")
     set(DOXYGEN_EXTRACT_ALL         YES)
     set(DOXYGEN_BUILTIN_STL_SUPPORT YES)
@@ -116,11 +116,11 @@ find_program(CLANG_FORMAT clang-format)
 if(CLANG_FORMAT)
   file(GLOB_RECURSE FORMAT_SOURCES
     "${CMAKE_SOURCE_DIR}/src/*.cu"
-    "${CMAKE_SOURCE_DIR}/src/*.cpp"
     "${CMAKE_SOURCE_DIR}/include/*.cuh"
     "${CMAKE_SOURCE_DIR}/include/*.h"
     "${CMAKE_SOURCE_DIR}/bench/*.cpp"
-    "${CMAKE_SOURCE_DIR}/test/*.cpp"
+    "${CMAKE_SOURCE_DIR}/test/*.cu"
+    "${CMAKE_SOURCE_DIR}/test/*.h"
   )
   add_custom_target(format
     COMMAND ${CLANG_FORMAT} -i ${FORMAT_SOURCES}

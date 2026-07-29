@@ -1,9 +1,9 @@
 /**
  * @file   bench_solver.cpp
- * @brief  Full-solver benchmark: cuev::symm_eig_solve vs cuSOLVER.
+ * @brief  Full-solver benchmark: ase::symm_eig_solve vs cuSOLVER.
  *
  * Runs the whole pipeline (DBBR → bulge chasing → CPU D&C → back-transform) via
- * cuev::symm_eig_solve and validates the eigenpairs directly:
+ * ase::symm_eig_solve and validates the eigenpairs directly:
  *   - residual       max ‖A·V − V·Λ‖_F / ‖A‖_F
  *   - orthogonality  ‖Vᵀ·V − I‖_F
  *   - spectrum       max |λ − λ_cusolver|
@@ -16,7 +16,7 @@
  */
 
 #include "common.h"
-#include "cuev.h"
+#include "ase.h"
 #include <algorithm>
 #include <chrono>
 #include <cmath>
@@ -210,12 +210,12 @@ static void run_suite(cusolverDnHandle_t cusolver, cublasHandle_t cublas, int n,
     CUDA_CHECK(cudaMemcpy(dA, hA.data(), (size_t)n * n * sizeof(T), cudaMemcpyHostToDevice));
 
     // wall-clock: the pipeline mixes GPU kernels, blocking copies, and a CPU D&C.
-    cuev::SolveTimer timer;
+    ase::SolveTimer timer;
     CUDA_CHECK(cudaStreamSynchronize(stream));
     auto t0 = std::chrono::high_resolution_clock::now();
-    cuev::symm_eig_solve<T>(dA, n, d_eval, d_evec, stream, &timer);
+    ase::symm_eig_solve<T>(dA, n, d_eval, d_evec, stream, &timer);
     CUDA_CHECK(cudaStreamSynchronize(stream));
-    double ms_cuev =
+    double ms_ase =
         std::chrono::duration<double, std::milli>(std::chrono::high_resolution_clock::now() - t0)
             .count();
 
@@ -231,13 +231,13 @@ static void run_suite(cusolverDnHandle_t cusolver, cublasHandle_t cublas, int n,
     printf("=== full solver %s  n=%d ===\n", prec, n);
     if (have_ref) {
         printf("  cusolver_%csyevd (vectors)   %10.2f ms\n", c, ms_ref);
-        printf("  cuev symm_eig_solve         %10.2f ms   (%.2fx %csyevd)\n", ms_cuev,
-               ms_cuev / ms_ref, c);
+        printf("  ase symm_eig_solve         %10.2f ms   (%.2fx %csyevd)\n", ms_ase,
+               ms_ase / ms_ref, c);
     } else {
         printf("  cusolver_%csyevd (vectors) %s\n", c, unsup);
-        printf("  cuev symm_eig_solve         %10.2f ms\n", ms_cuev);
+        printf("  ase symm_eig_solve         %10.2f ms\n", ms_ase);
     }
-    cuev::solve_timer_print(timer);
+    ase::solve_timer_print(timer);
     printf("  -- correctness --\n");
     printf("  residual  ‖A·V − V·Λ‖/‖A‖     %9.2e\n", rel_res);
     printf("  orthogon. ‖Vᵀ·V − I‖_F        %9.2e\n", orth);

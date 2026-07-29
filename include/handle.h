@@ -1,6 +1,6 @@
 /**
  * @file   handle.h
- * @brief  SolverHandle<T> — cuBLAS/cuSOLVER handles and scratch buffers for cuEV.
+ * @brief  SolverHandle<T> — cuBLAS/cuSOLVER handles and scratch buffers for ASE.
  *
  * TODO: add description
  *
@@ -14,7 +14,7 @@
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
 
-namespace cuev {
+namespace ase {
 
 /**
  * @brief Per-stage timings for one symm_eig_solve.
@@ -134,4 +134,4 @@ template <typename T> SolverHandle<T> handle_alloc(int n, int nbw, int nk, cudaS
  */
 template <typename T> void handle_free(SolverHandle<T> *ws);
 
-} // namespace cuev
+} // namespace ase

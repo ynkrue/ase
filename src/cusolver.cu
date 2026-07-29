@@ -1,18 +1,18 @@
 /**
  * @file   cusolver.cu
- * @brief  Type-dispatching cuSOLVER wrappers — cuev::cusolver namespace.
+ * @brief  Type-dispatching cuSOLVER wrappers — ase::cusolver namespace.
  *
  * @author Yannik Rüfenacht
  * @date   2026-06
  */
 
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
+#include "handle.h"
+#include "kernels.cuh"
 #include <cstdio>
 #include <cstdlib>
 #include <type_traits>
 
-namespace cuev {
+namespace ase {
 namespace cusolver {
 
 namespace {
@@ -51,4 +51,4 @@ INSTANTIATE(double)
 #undef INSTANTIATE
 
 } // namespace cusolver
-} // namespace cuev
+} // namespace ase

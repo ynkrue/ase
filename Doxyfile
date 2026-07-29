@@ -1,5 +1,5 @@
 DOXYFILE_ENCODING      = UTF-8
-PROJECT_NAME           = "cuEV"
+PROJECT_NAME           = "ASE"
 PROJECT_BRIEF          = "CUDA symmetric dense eigensolver"
 OUTPUT_DIRECTORY       = docs
 INPUT                  = include src
