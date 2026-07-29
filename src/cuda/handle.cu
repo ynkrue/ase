@@ -27,13 +27,29 @@ template <typename T> SolverHandle<T> handle_alloc(int n, int nbw, int nk, cudaS
     CUSOLVER_CHECK(cusolverDnSetStream(ws.cusolver, stream));
     CUDA_CHECK(cudaMalloc(&ws.d_info, sizeof(int)));
 
-    // Workspace query
-    if constexpr (std::is_same_v<T, float>)
+    // Workspace query — newer cuSOLVER (12.x+) requires a non-null A pointer
+    // even for the buffer-size query, so allocate a temporary dummy.
+    // cuSOLVER 12.x has NON-MONOTONIC workspace in m: smaller m can request
+    // *more* workspace (up to ~50M elements for m=nbw vs 82K for m=n at nbw=32),
+    // so we query both extremes and take the max.
+    T *geqrf_dummy = nullptr;
+    CUDA_CHECK(cudaMalloc(&geqrf_dummy, (size_t)n * nbw * sizeof(T)));
+    if constexpr (std::is_same_v<T, float>) {
         CUSOLVER_CHECK(
-            cusolverDnSgeqrf_bufferSize(ws.cusolver, n, nbw, nullptr, n, &ws.geqrf_lwork));
-    else
+            cusolverDnSgeqrf_bufferSize(ws.cusolver, n, nbw, geqrf_dummy, n, &ws.geqrf_lwork));
+        int lwork_small = 0;
         CUSOLVER_CHECK(
-            cusolverDnDgeqrf_bufferSize(ws.cusolver, n, nbw, nullptr, n, &ws.geqrf_lwork));
+            cusolverDnSgeqrf_bufferSize(ws.cusolver, nbw, nbw, geqrf_dummy, nbw, &lwork_small));
+        if (lwork_small > ws.geqrf_lwork) ws.geqrf_lwork = lwork_small;
+    } else {
+        CUSOLVER_CHECK(
+            cusolverDnDgeqrf_bufferSize(ws.cusolver, n, nbw, geqrf_dummy, n, &ws.geqrf_lwork));
+        int lwork_small = 0;
+        CUSOLVER_CHECK(
+            cusolverDnDgeqrf_bufferSize(ws.cusolver, nbw, nbw, geqrf_dummy, nbw, &lwork_small));
+        if (lwork_small > ws.geqrf_lwork) ws.geqrf_lwork = lwork_small;
+    }
+    CUDA_CHECK(cudaFree(geqrf_dummy));
 
     // Pool layout
     auto align_up = [](size_t x) -> size_t { return (x + 255) & ~size_t(255); };

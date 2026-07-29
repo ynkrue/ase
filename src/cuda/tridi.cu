@@ -40,7 +40,6 @@
 // =============================================================================
 // LAPACK (host) f77 entry points — leaf solver + merge-sort permutation only.
 // =============================================================================
-namespace {
 extern "C" {
 void dstedc_(const char *, const int *, double *, double *, double *, const int *, double *,
              const int *, int *, const int *, int *);
@@ -49,7 +48,6 @@ void sstedc_(const char *, const int *, float *, float *, float *, const int *, 
 void dlamrg_(const int *, const int *, const double *, const int *, const int *, int *);
 void slamrg_(const int *, const int *, const float *, const int *, const int *, int *);
 }
-} // namespace
 
 // =============================================================================
 // Device kernels
