@@ -1,6 +1,10 @@
 #pragma once
+#include <cfloat>
+#include <cstdio>
 #include <cstdlib>
+#include <cublas_v2.h>
 #include <cuda_runtime.h>
+#include <cusolverDn.h>
 
 // =============================================================================
 // Error checking
@@ -41,27 +45,36 @@ inline int div_up(int a, int b) {
     return (a + b - 1) / b;
 }
 
-inline int align_up(int x) {
-    return (x + 255) & ~size_t(255);
-}
-
 // =============================================================================
-// Device helpers
+// Device helpers  (all ASE translation units are .cu, so one __CUDACC__ block covers
+// both the host-callable helpers below and the device-only ones)
 // =============================================================================
 #ifdef __CUDACC__
 
-template <typename T> __device__ __forceinline__ T tabs(T x) {
-    return x < T(0) ? -x : x;
+/// LAPACK's DLAMCH('Epsilon'): the relative machine precision, ulp/2 under IEEE
+/// round-to-nearest. This is *half* of C's DBL_EPSILON — DBL_EPSILON is LAPACK's
+/// DLAMCH('Precision'), a different quantity.
+///
+/// Every tolerance in the ported D&C code is a multiple of this: the deflation test in
+/// tridi.cu's host_laed2, the block-splitting test in stedx, and the convergence tests
+/// in secular.cu's dlaed4/dlaed6. Reaching for std::numeric_limits<double>::epsilon()
+/// instead silently doubles all of them, so route every one of them through here.
+__host__ __device__ __forceinline__ double lapack_eps() {
+    return DBL_EPSILON / 2.0;
+}
+
+__device__ __forceinline__ double tabs(double x) {
+    return x < 0.0 ? -x : x;
 }
 
 /// Reference to packed lower-band A[i,j] (i >= j): packed row = i-j, col = j, leading dim ldb.
-template <typename T> __device__ __forceinline__ T &band_at(T *B, int i, int j, int ldb) {
+__device__ __forceinline__ double &band_at(double *B, int i, int j, int ldb) {
     return B[(i - j) + j * ldb];
 }
 
 /// Symmetric read of A[i,j] (any i,j in band); reflects the upper triangle to the stored lower
 /// band.
-template <typename T> __device__ __forceinline__ T band_sym(const T *B, int i, int j, int ldb) {
+__device__ __forceinline__ double band_sym(const double *B, int i, int j, int ldb) {
     if (i < j) {
         int t = i;
         i = j;
@@ -71,21 +84,22 @@ template <typename T> __device__ __forceinline__ T band_sym(const T *B, int i, i
 }
 
 /// Sum a value across the 32 lanes of a warp; every lane returns the total.
-template <typename T> __device__ __forceinline__ T warp_sum(T v) {
+__device__ __forceinline__ double warp_sum(double v) {
     for (int o = 16; o > 0; o >>= 1)
         v += __shfl_xor_sync(0xffffffffu, v, o);
     return v;
 }
 
 /// Block-wide sum reduction into thread 0. Caller broadcasts and syncs after.
-template <typename T, int BLOCKSIZE> __device__ __forceinline__ T block_reduce_sum(T val, T *smem) {
+template <int BLOCKSIZE>
+__device__ __forceinline__ double block_reduce_sum(double val, double *smem) {
     smem[threadIdx.x] = val;
     __syncthreads();
     for (int s = BLOCKSIZE >> 1; s >= 32; s >>= 1) {
         if (threadIdx.x < s) smem[threadIdx.x] += smem[threadIdx.x + s];
         __syncthreads();
     }
-    T v = T(0);
+    double v = 0.0;
     if (threadIdx.x < 32) {
         v = smem[threadIdx.x];
         v += __shfl_down_sync(0xffffffff, v, 16);

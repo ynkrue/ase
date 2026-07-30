@@ -34,10 +34,10 @@ Every `.cu` and `.cuh` file begins with a Doxygen block:
 ## Namespaces
 
 ```
-ase               public API: symm_eig_solve, SolverHandle, handle_alloc/free
+ase               public API: solve_ev, solve_ev_d, AseHandle, handle_alloc/free
 ase::kernels      custom GPU kernel launchers (dbbr_*, bc_*, bt_*)
-ase::cublas       type-dispatching cuBLAS wrappers — all take SolverHandle<T>*
-ase::cusolver     workspace-aware cuSOLVER wrappers — all take SolverHandle<T>*
+ase::cublas       cuBLAS wrappers   — all take AseHandle*
+ase::cusolver     workspace-aware cuSOLVER wrappers — all take AseHandle*
 ```
 
 `__global__` kernels live in anonymous namespaces inside their `.cu` files — never exported.
@@ -46,7 +46,7 @@ ase::cusolver     workspace-aware cuSOLVER wrappers — all take SolverHandle<T>
 
 ## Handle pattern
 
-All cuBLAS and cuSOLVER wrappers take `SolverHandle<T> *ws` as the first argument and
+All cuBLAS and cuSOLVER wrappers take `AseHandle *ws` as the first argument and
 extract the handle internally. Never pass `cublasHandle_t` or `cusolverDnHandle_t` directly
 at call sites.
 
@@ -58,21 +58,39 @@ cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, m, n, k, &alpha, A, lda, B, ldb, &bet
 cublas::gemm(ws->cublas_handle, CUBLAS_OP_N, ...);
 ```
 
+`AseHandle` owns raw device, pinned-host and host allocations. It has no copy
+semantics — always pass it by pointer, never by value.
+
 ---
 
-## Templates
+## Precision
 
-- All numeric code templated on `T` (float or double)
-- Use `if constexpr (std::is_same_v<T, float>)` for type dispatch
-- Every `.cu` ends with explicit instantiations via the `INSTANTIATE` macro:
+The solver is **double precision throughout**; nothing is templated on the scalar type.
+Kernels, wrappers and the public API all take `double`. If float support is added later it
+belongs behind a template parameter on `AseHandle` and the launchers, but until then do
+not introduce `T` parameters or explicit instantiations for a single type.
 
-```cpp
-#define INSTANTIATE(T) \
-    template void dbbr_panel_qr<T>(SolverHandle<T> *, int, int);
-INSTANTIATE(float)
-INSTANTIATE(double)
-#undef INSTANTIATE
-```
+---
+
+## Fixed parameters
+
+Blocking constants live in `include/handle.h` as `inline constexpr` (`DBBR_NBW`, `DBBR_NK`,
+`DC_LEAF`, `BC_BACK_*`). They are fixed algorithmic properties, not runtime options: buffer
+layout, launch geometry and shared-memory budgets are derived from them. Never plumb them
+through a function signature or expose them as parameters.
+
+---
+
+## Host memory
+
+- No allocation in the solve path — no `std::vector`, `new` or `malloc` below
+  `solve_ev`/`solve_ev_d`. Host scratch is sized in `handle_check` (called lazily, cached
+  across repeated solves at the same `n`) and reached via `ws->h_*`.
+- Anything that is the endpoint of an async copy must be pinned (`ws->host_pin`); purely
+  host-side scratch goes in the pageable block (`ws->host_buf`).
+- A `cudaStreamSynchronize` is acceptable only for a genuine data dependency — the host
+  needing a device result to proceed. Never sync merely to keep a local buffer alive; give
+  the buffer handle lifetime instead. Comment every remaining sync with which it is.
 
 ---
 
@@ -93,7 +111,7 @@ INSTANTIATE(double)
  * @param[in]     k     number of columns in Z and Y
  */
 template <typename T>
-void dbbr_syr2k(SolverHandle<T> *ws, T *A, const T *Z, const T *Y, int n, int k);
+void dbbr_syr2k(AseHandle<T> *ws, T *A, const T *Z, const T *Y, int n, int k);
 ```
 
 Rules:
@@ -121,7 +139,7 @@ what the code does.
 ## Memory
 
 - All matrices **column-major** (matches cuBLAS/cuSOLVER; leading dimension = number of rows)
-- No `cudaMalloc` / `cudaFree` in the hot path — use `SolverHandle::pool` or pre-allocated buffers
+- No `cudaMalloc` / `cudaFree` in the hot path — use `AseHandle::pool` or pre-allocated buffers
 - Eigenvectors stored as **columns**: `evec[j * n + i]` = i-th component of j-th eigenvector
 
 ---

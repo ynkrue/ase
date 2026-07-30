@@ -9,7 +9,7 @@
 #include "common.h"
 #include "handle.h"
 #include "kernels.cuh"
-#include <type_traits>
+#include <algorithm>
 
 // =============================================================================
 // Device kernels
@@ -28,14 +28,14 @@ namespace {
  * @param[in]  b    bandwidth
  * @param[in]  lda  leading dimension of A
  */
-template <typename T> __global__ void bc_pack_kernel(const T *A, T *Bp, int n, int b, int lda) {
+__global__ void bc_pack_kernel(const double *A, double *Bp, int n, int b, int lda) {
     const int ldb = 2 * b;
     int r = blockIdx.x * blockDim.x + threadIdx.x;
     int j = blockIdx.y * blockDim.y + threadIdx.y;
     if (r >= ldb || j >= n) return;
 
     int i = j + r;
-    Bp[r + j * ldb] = (r <= b && i < n) ? A[i + (size_t)j * lda] : T(0);
+    Bp[r + j * ldb] = (r <= b && i < n) ? A[i + (size_t)j * lda] : 0.0;
 }
 
 /**
@@ -52,18 +52,17 @@ template <typename T> __global__ void bc_pack_kernel(const T *A, T *Bp, int n, i
  * @param[in]  cols  columns in the panel (bandwidth b)
  * @param[in]  lda   leading dimension of A and Y (= ws->n)
  */
-template <typename T>
 __launch_bounds__(256) __global__
-    void dbbr_extract_reflectors(const T *A, T *Y, int rows, int cols, int lda) {
+    void dbbr_extract_reflectors(const double *A, double *Y, int rows, int cols, int lda) {
     int r = blockIdx.x * blockDim.x + threadIdx.x;
     int c = blockIdx.y * blockDim.y + threadIdx.y;
     if (r >= rows || c >= cols) return;
 
-    T v;
+    double v;
     if (r < c)
-        v = T(0);
+        v = 0.0;
     else if (r == c)
-        v = T(1);
+        v = 1.0;
     else
         v = A[c * lda + r];
 
@@ -83,18 +82,18 @@ __launch_bounds__(256) __global__
  * @param[out] Tri  b×b block factor, column-major, ldt = b
  * @param[in]  b    panel width (≤ 64)
  */
-template <typename T> __global__ void dbbr_larft(const T *G, const T *tau, T *Tri, int b) {
-    __shared__ T sT[64 * 64];
+__global__ void dbbr_larft(const double *G, const double *tau, double *Tri, int b) {
+    __shared__ double sT[64 * 64];
     const int tid = threadIdx.x;
 
     for (int c = 0; c < b; ++c)
-        sT[tid + c * b] = T(0);
+        sT[tid + c * b] = 0.0;
     __syncthreads();
 
     // Columns of T are built left to right; column i needs columns 0..i-1.
     for (int i = 0; i < b; ++i) {
         if (tid < i) {
-            T acc = T(0);
+            double acc = 0.0;
             for (int q = tid; q < i; ++q)
                 acc += sT[tid + q * b] * G[q + i * b]; // T[p,q]·G[q,i]
             sT[tid + i * b] = -tau[i] * acc;
@@ -113,7 +112,7 @@ template <typename T> __global__ void dbbr_larft(const T *G, const T *tau, T *Tr
 namespace ase {
 namespace kernels {
 
-template <typename T> void dbbr_pack(SolverHandle<T> *ws, const T *A, T *Bp, int n, int b) {
+void dbbr_pack(AseHandle *ws, const double *A, double *Bp, int n, int b) {
     const int lda = ws->n;
     constexpr int BX = 32, BY = 8;
     dim3 block(BX, BY);
@@ -121,12 +120,12 @@ template <typename T> void dbbr_pack(SolverHandle<T> *ws, const T *A, T *Bp, int
     bc_pack_kernel<<<grid, block, 0, ws->stream>>>(A, Bp, n, b, lda);
 }
 
-template <typename T> void dbbr_panel_qr(SolverHandle<T> *ws, T *A, T *Y, int rows, int b) {
+void dbbr_panel_qr(AseHandle *ws, double *A, double *Y, int rows, int b) {
     const int lda = ws->n;
 
     // QR factorization: R in upper triangle of A, Householder vectors
     // below the diagonal, scalars into ws->tau.
-    cusolver::geqrf(ws, rows, b, A, lda, ws->tau, ws->stream);
+    cusolver::geqrf(ws, rows, b, A, lda, ws->tau);
 
     // extract lower-trapezoidal reflectors  A → Y
     constexpr int BX = 64, BY = 4;
@@ -136,19 +135,19 @@ template <typename T> void dbbr_panel_qr(SolverHandle<T> *ws, T *A, T *Y, int ro
 
     // larft: build b×b block factor T from Y and ws->tau into ws->Tri
     //   Gram matrix G = Yᵀ·Y with syrk → ws->Dwk
-    const T one = T(1), zero = T(0);
+    const double one = 1.0, zero = 0.0;
     cublas::syrk(ws, CUBLAS_FILL_MODE_UPPER, CUBLAS_OP_T, b, rows, &one, Y, lda, &zero, ws->Dwk, b);
     //   triangular recurrence → ws->Tri
     dbbr_larft<<<1, b, 0, ws->stream>>>(ws->Dwk, ws->tau, ws->Tri, b);
 }
 
-template <typename T> void dbbr_reduce(SolverHandle<T> *ws, T *A, T *B) {
+void dbbr_reduce(AseHandle *ws, double *A, double *B) {
     int n = ws->n, b = ws->nbw, k = ws->nk;
     int lda = ws->n;
-    T zero = T(0);
-    T one = T(1);
-    T neg1 = T(-1);
-    T neg_half = T(-0.5);
+    double zero = 0.0;
+    double one = 1.0;
+    double neg1 = -1.0;
+    double neg_half = -0.5;
 
     // outer (block) loop
     for (int i = 0; i < n; i += k) {
@@ -206,12 +205,18 @@ template <typename T> void dbbr_reduce(SolverHandle<T> *ws, T *A, T *B) {
 
             // green update if next panel is within this block
             if (j + pc < i + kc) {
+                // Columns of the *next* panel, clamped to the matrix edge. Passing pc here
+                // instead walks columns j+pc … j+2pc-1, which runs past column n-1 once
+                // j > n-2b — a GEMM writing beyond the end of A (silent device-heap
+                // corruption: the stray columns are never read back, so results stay
+                // correct and only compute-sanitizer sees it).
+                const int nc = std::min(pc, rows);
                 // A[j+b:n, j+b:j+2b] -= Z[j+b:n, 0:w]·Y[j+b:j+2b, i:i+w]ᵀ
-                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, pc, block_cols, &neg1,
+                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, nc, block_cols, &neg1,
                              ws->Z + (j + pc), lda, ws->Y + i * lda + (j + pc), lda, &one, A + tr,
                              lda);
                 // A[j+b:n, j+b:j+2b] -= Y[j+b:n, i:i+w]·Z[j+b:j+2b, 0:w]ᵀ
-                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, pc, block_cols, &neg1,
+                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, nc, block_cols, &neg1,
                              ws->Y + i * lda + (j + pc), lda, ws->Z + (j + pc), lda, &one, A + tr,
                              lda);
             }
@@ -227,17 +232,6 @@ template <typename T> void dbbr_reduce(SolverHandle<T> *ws, T *A, T *B) {
     // Pack the lower band of the reduced matrix into packed B
     dbbr_pack(ws, A, B, n, b);
 }
-
-// =============================================================================
-// Explicit instantiations
-// =============================================================================
-#define INSTANTIATE(T)                                                                             \
-    template void dbbr_pack<T>(SolverHandle<T> *, const T *, T *, int, int);                       \
-    template void dbbr_panel_qr<T>(SolverHandle<T> *, T *, T *, int, int);                         \
-    template void dbbr_reduce<T>(SolverHandle<T> *, T *, T *);
-INSTANTIATE(float)
-INSTANTIATE(double)
-#undef INSTANTIATE
 
 } // namespace kernels
 } // namespace ase

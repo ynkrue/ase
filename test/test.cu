@@ -1,6 +1,6 @@
 /**
- * @file   bench.cpp
- * @brief  Benchmark entry point.
+ * @file   test.cu
+ * @brief  Test entry point.
  *
  * @author  Yannik Rüfenacht
  * @date    2026-07
@@ -10,6 +10,6 @@
 #include <cstdio>
 
 int main() {
-    printf("ase_bench: no benchmarks yet\n");
+    printf("ase_test: no tests yet\n");
     return 0;
 }

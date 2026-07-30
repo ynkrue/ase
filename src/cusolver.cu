@@ -1,6 +1,6 @@
 /**
  * @file   cusolver.cu
- * @brief  Type-dispatching cuSOLVER wrappers — ase::cusolver namespace.
+ * @brief  cuSOLVER wrappers — ase::cusolver namespace.
  *
  * @author Yannik Rüfenacht
  * @date   2026-06
@@ -10,45 +10,32 @@
 #include "kernels.cuh"
 #include <cstdio>
 #include <cstdlib>
-#include <type_traits>
 
 namespace ase {
 namespace cusolver {
 
-namespace {
-inline void check_info([[maybe_unused]] int *d_info, [[maybe_unused]] const char *name,
-                       [[maybe_unused]] cudaStream_t stream) {
-#ifndef NDEBUG
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-    int h_info = 0;
-    CUDA_CHECK(cudaMemcpy(&h_info, d_info, sizeof(int), cudaMemcpyDeviceToHost));
-    if (h_info != 0) {
-        fprintf(stderr, "cuSOLVER %s failed: info = %d\n", name, h_info);
-        exit(1);
+void geqrf(AseHandle *ws, int m, int n, double *A, int lda, double *tau) {
+    const int slot = ws->info_used < ws->info_cap ? ws->info_used++ : ws->info_cap - 1;
+    int *info = ws->d_info + slot;
+
+    CUSOLVER_CHECK(
+        cusolverDnDgeqrf(ws->cusolver, m, n, A, lda, tau, ws->geqrf_buf, ws->geqrf_lwork, info));
+}
+
+void geqrf_check(AseHandle *ws) {
+    if (ws->info_used == 0) return;
+
+    CUDA_CHECK(cudaMemcpyAsync(ws->h_info, ws->d_info, (size_t)ws->info_used * sizeof(int),
+                               cudaMemcpyDeviceToHost, ws->stream));
+    CUDA_CHECK(cudaStreamSynchronize(ws->stream));
+
+    for (int i = 0; i < ws->info_used; ++i) {
+        if (ws->h_info[i] != 0) {
+            fprintf(stderr, "ase: geqrf failed on panel %d, info = %d\n", i, ws->h_info[i]);
+            exit(EXIT_FAILURE);
+        }
     }
-#endif
 }
-} // namespace
-
-template <typename T>
-void geqrf(SolverHandle<T> *ws, int m, int n, T *A, int lda, T *tau, cudaStream_t stream) {
-    if constexpr (std::is_same_v<T, float>)
-        CUSOLVER_CHECK(cusolverDnSgeqrf(ws->cusolver, m, n, A, lda, tau, ws->geqrf_buf,
-                                        ws->geqrf_lwork, ws->d_info));
-    else
-        CUSOLVER_CHECK(cusolverDnDgeqrf(ws->cusolver, m, n, A, lda, tau, ws->geqrf_buf,
-                                        ws->geqrf_lwork, ws->d_info));
-    check_info(ws->d_info, "geqrf", stream);
-}
-
-// =============================================================================
-// Explicit instantiations
-// =============================================================================
-#define INSTANTIATE(T)                                                                             \
-    template void geqrf<T>(SolverHandle<T> *, int, int, T *, int, T *, cudaStream_t);
-INSTANTIATE(float)
-INSTANTIATE(double)
-#undef INSTANTIATE
 
 } // namespace cusolver
 } // namespace ase
