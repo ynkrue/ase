@@ -2,8 +2,8 @@
  * @file   handle.h
  * @brief  AseHandle — cuBLAS/cuSOLVER handles and scratch buffers for ASE.
  *
- * Internal header: defines the type that ase/ase.h forward-declares as opaque, plus the
- * fixed blocking constants. Not installed — nothing outside src/ may include it.
+ * Internal header: defines the type that ase/ase.h forward-declares, plus the
+ * fixed blocking constants.
  *
  * @author  Yannik Rüfenacht
  * @date    2026-06
@@ -26,17 +26,10 @@ inline constexpr int DBBR_NK = 512;
 
 // dbbr_reduce's outer/inner loop (src/dbbr.cu) walks panels of width DBBR_NBW nested
 // inside blocks of width DBBR_NK; the panel positions only stay b-aligned across a block
-// boundary if DBBR_NK is a multiple of DBBR_NBW. Break this and a panel can straddle two
-// blocks, so the next block reprocesses already-reduced columns — silently wrong
-// eigenvectors, not a crash. handle.cu's geqrf_count/geqrf_lwork_max sizing relies on the
-// same alignment (they model the panel loop as flat, ignoring the outer block loop).
-static_assert(DBBR_NK % DBBR_NBW == 0,
-              "DBBR_NK must be a multiple of DBBR_NBW: dbbr_reduce's block/panel loops and "
-              "the geqrf workspace/info sizing in handle.cu both assume block boundaries "
-              "fall on panel boundaries");
+// boundary if DBBR_NK is a multiple of DBBR_NBW.
+static_assert(DBBR_NK % DBBR_NBW == 0, "DBBR_NK must be a multiple of DBBR_NBW");
 
-/// D&C leaf size: sub-problems this size or smaller go to host LAPACK *stedc
-/// instead of being split further.
+/// D&C leaf size: sub-problems use host LAPACK *stedc
 inline constexpr int DC_LEAF = 512;
 
 /// bc_back sliding-window geometry; BC_BACK_PAD is the row padding U and M carry below row n.
@@ -44,25 +37,16 @@ inline constexpr int BC_BACK_PT = 8;
 inline constexpr int BC_BACK_WIN = BC_BACK_PT * 32;
 inline constexpr int BC_BACK_PAD = 2 * BC_BACK_WIN;
 
-/// Padded leading dimension of U and M, multiple of 4 for aligned double4_32a.
-inline int bc_back_ldu(int n) {
-    return ((n + BC_BACK_PAD + 3) / 4) * 4;
-}
-
 /**
- * @brief Per-solve context: library handles + pre-allocated device and host scratch.
+ * @brief library handles + pre-allocated device and host scratch.
  *
- * handle_alloc only creates the cuBLAS/cuSOLVER contexts — it does not know the problem
- * size yet. The workspace pool is (re)sized lazily by handle_check(ws, n), called at the
- * top of solve_ev/solve_ev_d: a no-op if the handle is already sized for @p n (the common
- * repeated-solve case), otherwise a full free-and-reallocate for the new size. Destroyed
- * via handle_free.
+ * allocate with handle_alloc, pass the pointer to solve_ev, release with
+ * handle_free. The handle owns raw device, pinned-host and host allocations,
+ * it is never copied or stack-allocated by the caller.
  *
- * Owns raw device, pinned-host and host allocations and has no copy semantics: copying
- * an AseHandle aliases those allocations and will double-free. Pass it by pointer.
  */
 struct AseHandle {
-    int n;   ///< problem dimension; 0 means "unsized" (never solved yet)
+    int n;   ///< problem dimension
     int nbw; ///< bandwidth of banded matrix
     int nk;  ///< outer panel size
     int ldu; ///< padded leading dim for U and M
@@ -71,16 +55,16 @@ struct AseHandle {
     cublasHandle_t cublas;
     cusolverDnHandle_t cusolver;
 
-    int *d_info;   ///< one info slot per geqrf call, checked once per solve
+    int *d_info;   ///< info slot for geqrf
     int info_cap;  ///< number of slots
     int info_used; ///< slots consumed so far
 
     // DBBR buffers
     double *Y;   ///< n*n - Householder reflectors, retained for SBR-Back
-    double *Z;   ///< n*k - trailing two-sided companion (syr2k factor), transient per block
+    double *Z;   ///< n*k - trailing two-sided companion (syr2k factor)
     double *tau; ///< nbw - Householder scalars
-    double *Tri; ///< nbw*nbw - block reflector triangular factor T (larft output, transient)
-    double *Dwk; ///< nk*nbw - panel scratch (Yᵀ·AY and deferral-correction GEMM temps)
+    double *Tri; ///< nbw*nbw - block reflector triangular factor T
+    double *Dwk; ///< nk*nbw - panel scratch
     double *W;   ///< n*n - SBR-Back companion W = Y·T
 
     // BC buffers
@@ -113,10 +97,8 @@ struct AseHandle {
     double *h_leafQ; ///< n*min(n,DC_LEAF) - D&C leaf eigenvector staging (host stedc → device)
     void *host_pin;  ///< backing allocation for the pinned mirrors
 
-    // Pageable host scratch for the D&C driver (never touched by async copies).
-    // The LAPACK leaf workspaces are sliced per leaf, not per thread: leaf i gets a
-    // disjoint range at a offset derived from the partition, so the leaf loop needs no
-    // thread identity and stays correct with or without OpenMP.
+    // Pageable host scratch for the D&C driver.
+    // The LAPACK leaf workspaces are sliced per leaf.
     int *h_indxq;       ///< n - per-block eigenvalue permutation
     int *h_iwk;         ///< 3n - dlaed2 index scratch
     int *h_part;        ///< 2n+2 - D&C sub-problem partition
@@ -126,16 +108,14 @@ struct AseHandle {
     void *host_buf;     ///< backing allocation for the pageable host scratch
 
     // back-transform buffers
-    double *M; ///< ldu*n - back-transform working buffer (padded for bc_back kernel)
+    double *M; ///< ldu*n - back-transform working buffer (padded)
 
     // cuSOLVER buffers
     double *geqrf_buf;
     int geqrf_lwork;
 
-    // Device staging for the host-pointer solve_ev(). 2n²+n doubles — about 40% on top of
-    // the main pool — so it is kept out of it and allocated on first use: a handle that
-    // only ever sees solve_ev_d never pays for it. handle_stage() fills these in.
-    void *stage_pool;   ///< backing allocation; null until the first solve_ev at this n
+    // Device staging for the host-pointer solve_ev() (host wrapper)
+    void *stage_pool;   ///< backing allocation
     double *A_stage;    ///< n*n - device mirror of the caller's host A
     double *eval_stage; ///< n   - device mirror of the caller's host eval
     double *evec_stage; ///< n*n - device mirror of the caller's host evec
@@ -148,25 +128,19 @@ struct AseHandle {
 /**
  * @brief Ensure @p ws's workspace is sized for @p n, resizing only if necessary.
  *
- * No-op if @p ws is already sized for @p n (the common repeated-solve case). Otherwise
- * frees any existing workspace and reallocates it for the new size — a full device
- * free+malloc, far more expensive than a same-size solve. Called internally by
- * solve_ev/solve_ev_d; not part of the public API. If a caller genuinely interleaves
- * two problem sizes on a hot path, it should use two handles instead of resizing one
- * repeatedly.
+ * No-op if @p ws is already sized for @p n. Otherwise frees any existing workspace
+ * and reallocates it for the new size. If a caller genuinely interleaves two problem
+ * sizes on a hot path, it should use two handles instead of resizing one repeatedly.
  *
- * @param[in,out] ws  handle to resize (must come from handle_alloc)
- * @param[in]     n   root problem dimension; must be > 0 (aborts otherwise, which also
- *                    keeps n == 0 unambiguously meaning "unsized")
+ * @param[in,out] ws  handle to resize
+ * @param[in]     n   root problem dimension; must be > 0
  */
 void handle_check(AseHandle *ws, int n);
 
 /**
  * @brief Ensure @p ws's solve_ev staging buffers exist. Call only after handle_check.
  *
- * No-op once allocated. handle_check drops them when the handle is resized, so they are
- * always sized for the handle's current n. Only solve_ev needs this; solve_ev_d works
- * straight off the caller's device pointers and never calls it.
+ * No-op once allocated. Only solve_ev needs this.
  *
  * @param[in,out] ws  handle already sized for the target dimension
  */

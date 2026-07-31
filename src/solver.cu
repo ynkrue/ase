@@ -25,7 +25,7 @@ namespace {
 // Shared by solve_ev/solve_ev_d once ws is sized for A/eval/evec's dimension
 // (handle_check already ran). A/eval/evec may be device pointers straight from the
 // caller (solve_ev_d) or the handle's own staging buffers (solve_ev).
-void run_pipeline(AseHandle *ws, double *A, double *eval, double *evec) {
+void solve(AseHandle *ws, double *A, double *eval, double *evec) {
     // Reused handles carry the previous solve's geqrf slot cursor; without this reset the
     // second solve runs past info_cap and its panel failures go unreported.
     ws->info_used = 0;
@@ -53,7 +53,7 @@ void run_pipeline(AseHandle *ws, double *A, double *eval, double *evec) {
 
 void solve_ev_d(AseHandle *ws, double *A, int n, double *eval, double *evec) {
     handle_check(ws, n);
-    run_pipeline(ws, A, eval, evec);
+    solve(ws, A, eval, evec);
     CUDA_CHECK(cudaStreamSynchronize(ws->stream));
     cusolver::geqrf_check(ws);
 }
@@ -65,7 +65,7 @@ void solve_ev(AseHandle *ws, const double *A, int n, double *eval, double *evec)
 
     CUDA_CHECK(
         cudaMemcpyAsync(ws->A_stage, A, (size_t)n * n * es, cudaMemcpyHostToDevice, ws->stream));
-    run_pipeline(ws, ws->A_stage, ws->eval_stage, ws->evec_stage);
+    solve(ws, ws->A_stage, ws->eval_stage, ws->evec_stage);
     CUDA_CHECK(
         cudaMemcpyAsync(eval, ws->eval_stage, (size_t)n * es, cudaMemcpyDeviceToHost, ws->stream));
     CUDA_CHECK(cudaMemcpyAsync(evec, ws->evec_stage, (size_t)n * n * es, cudaMemcpyDeviceToHost,

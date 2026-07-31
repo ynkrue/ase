@@ -18,8 +18,6 @@ endif()
 # =============================================================================
 # Options
 # =============================================================================
-# Toolchain is selected the usual CMake way, via cache or environment:
-#   CUDACXX / CUDAFLAGS / CXXFLAGS / CUDAHOSTCXX
 # The LAPACK implementation is selected with -DBLA_VENDOR=<...>, e.g.
 # Intel10_64lp (MKL), OpenBLAS, Generic.
 option(ASE_BUILD_TESTS   "Build the test binary"                   ON)
@@ -37,7 +35,7 @@ find_package(LAPACK REQUIRED)
 if(ASE_WITH_OPENMP)
   find_package(OpenMP COMPONENTS CXX)
   if(NOT OpenMP_CXX_FOUND)
-    message(WARNING "ASE_WITH_OPENMP=ON but OpenMP not found; leaf solves stay serial")
+    message(WARNING "ASE_WITH_OPENMP=ON but OpenMP not found, thus we stay serial")
   endif()
 endif()
 
@@ -57,8 +55,6 @@ add_library(ase
 )
 add_library(ase::ase ALIAS ase)
 
-# include/ holds the sole installed header, ase/ase.h; src/ holds the internal headers
-# (handle.h, common.h, kernels.cuh) and is deliberately not on the interface path.
 target_include_directories(ase
   PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)

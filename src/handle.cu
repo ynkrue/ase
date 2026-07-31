@@ -71,8 +71,7 @@ int geqrf_count(int n, int nbw) {
 }
 
 /// cuSOLVER 12.x geqrf workspace is not monotonic in m, so every panel height
-/// DBBR will use is queried. The dummy is only needed because the query rejects
-/// a null A.
+/// DBBR will use is queried.
 int geqrf_lwork_max(cusolverDnHandle_t h, int n, int nbw) {
     double *dummy = nullptr;
     CUDA_CHECK(cudaMalloc(&dummy, (size_t)n * nbw * sizeof(double)));
@@ -96,38 +95,33 @@ size_t handle_workspace_bytes(int n) {
     CUSOLVER_CHECK(cusolverDnCreate(&h));
     const int lwork = geqrf_lwork_max(h, n, DBBR_NBW);
     CUSOLVER_CHECK(cusolverDnDestroy(h));
+    int ldu = ((n + BC_BACK_PAD + 3) / 4) * 4;
 
-    return make_layout(n, DBBR_NBW, DBBR_NK, bc_back_ldu(n), lwork, geqrf_count(n, DBBR_NBW) + 1)
-        .total;
+    return make_layout(n, DBBR_NBW, DBBR_NK, ldu, lwork, geqrf_count(n, DBBR_NBW) + 1).total;
 }
 
 AseHandle *handle_alloc(cudaStream_t stream) {
-    auto *ws = new AseHandle{}; // zero-init: n == 0, every buffer pointer null
+    auto *ws = new AseHandle{};
     ws->stream = stream;
     CUBLAS_CHECK(cublasCreate(&ws->cublas));
     CUBLAS_CHECK(cublasSetStream(ws->cublas, stream));
     CUSOLVER_CHECK(cusolverDnCreate(&ws->cusolver));
     CUSOLVER_CHECK(cusolverDnSetStream(ws->cusolver, stream));
-    return ws; // ws->n == 0: workspace is unsized until the first handle_check(ws, n)
+    return ws;
 }
 
 void handle_check(AseHandle *ws, int n) {
-    // Rejecting n <= 0 here is what lets n == 0 stand for "unsized" without ambiguity:
-    // without it, solve*(ws, A, 0, ...) on a fresh handle would match the fast path below
-    // and run the whole pipeline against null buffers.
     if (n <= 0) {
         fprintf(stderr, "ase: invalid problem dimension n = %d (must be > 0)\n", n);
         exit(EXIT_FAILURE);
     }
-    if (ws->n == n) return; // already sized for this n — the common repeated-solve case
+    if (ws->n == n) return; // cached
 
     if (ws->n != 0) {
-        // Resizing an already-sized handle: tear down the previous pool before
-        // reallocating for the new n. cuBLAS/cuSOLVER contexts are untouched.
+        // Resizing pool (free). cuBLAS/cuSOLVER contexts are untouched.
         CUDA_CHECK(cudaFree(ws->pool));
         CUDA_CHECK(cudaFreeHost(ws->host_pin));
         std::free(ws->host_buf);
-        // Sized for the old n, so it cannot be reused; the next solve_ev remakes it.
         CUDA_CHECK(cudaFree(ws->stage_pool));
         ws->stage_pool = nullptr;
     }
@@ -138,7 +132,7 @@ void handle_check(AseHandle *ws, int n) {
     ws->n = n;
     ws->nbw = nbw;
     ws->nk = nk;
-    ws->ldu = bc_back_ldu(n);
+    ws->ldu = ((n + BC_BACK_PAD + 3) / 4) * 4; // padded for double4_32a alignment
 
     ws->geqrf_lwork = geqrf_lwork_max(ws->cusolver, n, nbw);
     ws->info_cap = geqrf_count(n, nbw) + 1;
@@ -183,11 +177,9 @@ void handle_check(AseHandle *ws, int n) {
     ws->dc_ij = dcI + 3 * (size_t)n; // 2n
     ws->dc_info = dcI + 5 * (size_t)n;
 
-    // Pinned host staging — everything here is an async copy endpoint, so it must be
-    // page-locked and must stay alive for the lifetime of the handle.
+    // Pinned host staging
     const int leaf = dc_leaf_size(n);
-    // Capacity of h_leafQ in doubles; bounds both sum(ms^2) over leaves and a single m*m
-    // block. Local-only: nothing outside this function needs it again.
+    // Capacity of h_leafQ in doubles
     const size_t leafQ_len = (size_t)n * leaf;
     const size_t pinT =
         ((size_t)6 * n + 2 * (size_t)n + leafQ_len) * sizeof(double); // merge + d,e + leafQ
@@ -208,12 +200,6 @@ void handle_check(AseHandle *ws, int n) {
     ws->h_ij = hI + 2 * (size_t)n; // 2n
     ws->h_info = hI + 4 * (size_t)n;
 
-    // Pageable host scratch for the D&C driver. None of it is an async copy endpoint,
-    // so it does not need pinning; it exists only to keep the leaf and merge loops
-    // allocation-free. The per-leaf LAPACK workspaces need 1+4·ms+ms² doubles and 3+5·ms
-    // ints for a leaf of size ms; summed over a partition of n that is bounded by
-    // leafQ_len+5n and 8n, since sum(ms²) <= leafQ_len, sum(ms) = n and there are at
-    // most n leaves.
     const size_t hostD = (leafQ_len + 5 * (size_t)n) * sizeof(double);
     const size_t hostI = ((size_t)6 * n + 2 + 8 * (size_t)n) * sizeof(int);
     const size_t hostS = ((size_t)2 * n + 2) * sizeof(size_t);
@@ -234,14 +220,12 @@ void handle_check(AseHandle *ws, int n) {
 }
 
 void handle_stage(AseHandle *ws) {
-    if (ws->stage_pool) return; // already made, and handle_check drops it on resize
+    if (ws->stage_pool) return;
 
     const size_t n = (size_t)ws->n;
     const size_t doubles = 2 * n * n + n;
     CUDA_CHECK(cudaMalloc(&ws->stage_pool, doubles * sizeof(double)));
 
-    // cudaMalloc is 256-byte aligned and every offset here is a whole number of doubles,
-    // so the three slices need no further padding.
     auto *b = (double *)ws->stage_pool;
     ws->A_stage = b;
     ws->evec_stage = b + n * n;
@@ -252,8 +236,6 @@ void handle_free(AseHandle *ws) {
     if (!ws) return;
     CUBLAS_CHECK(cublasDestroy(ws->cublas));
     CUSOLVER_CHECK(cusolverDnDestroy(ws->cusolver));
-    // A handle that was never solved on has n == 0 and null pool pointers; freeing null
-    // is a no-op for all of these, so the unsized case needs no special casing.
     CUDA_CHECK(cudaFree(ws->pool));
     CUDA_CHECK(cudaFree(ws->stage_pool));
     CUDA_CHECK(cudaFreeHost(ws->host_pin));
