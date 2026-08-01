@@ -87,4 +87,37 @@ void solve_ev(AseHandle *ws, const double *A, int n, double *eval, double *evec)
  */
 void solve_ev_d(AseHandle *ws, double *A, int n, double *eval, double *evec);
 
+/// Pipeline stages that can be timed individually: the three reduction/solve stages plus
+/// the back-transform split into its two halves (BC-Back, SBR-Back).
+enum ase_stage {
+    ASE_STAGE_DB = 0,
+    ASE_STAGE_BC,
+    ASE_STAGE_DC,
+    ASE_STAGE_BCBACK,
+    ASE_STAGE_SBR,
+    ASE_STAGE_COUNT
+};
+
+/**
+ * @brief Enable (on != 0) or disable per-stage CUDA-event timing.
+ *
+ * Off by default; when off the solve runs without recording. When on, each stage's time
+ * accumulates in the handle until ase_timing_read / ase_timing_reset.
+ *
+ * @param[in,out] ws  solver handle
+ * @param[in]     on  nonzero to record
+ */
+void ase_timing_enable(AseHandle *ws, int on);
+
+/// Zero the accumulated stage times on @p ws.
+void ase_timing_reset(AseHandle *ws);
+
+/**
+ * @brief Copy the accumulated per-stage times (ms) into @p ms (ASE_STAGE_COUNT entries).
+ *
+ * Values are cumulative across every solve since the last reset; divide by the number of
+ * solves to get per-solve averages. Zero when timing was never enabled.
+ */
+void ase_timing_read(AseHandle *ws, double *ms);
+
 } // namespace ase

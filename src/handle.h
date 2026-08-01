@@ -125,6 +125,10 @@ struct AseHandle
     // handle allocation
     void*  pool;
     size_t pool_bytes;
+
+    // optional per-stage timing (see ase_timing_enable); zeroed when off
+    bool   timing;
+    double timing_ms[ASE_STAGE_COUNT];
 };
 
 /**

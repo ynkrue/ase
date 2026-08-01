@@ -13,6 +13,7 @@
 #include "common.h"
 #include "handle.h"
 #include "kernels.cuh"
+#include "timing.h"
 #include <algorithm>
 #include <cmath>
 #include <cublas_v2.h>
@@ -36,15 +37,22 @@ void solve(AseHandle* ws, double* A, double* eval, double* evec)
     CUDA_CHECK(cudaMemsetAsync(ws->U, 0, (size_t)ws->ldu * ws->n * sizeof(double), ws->stream));
 
     // Stage 1: full → band (DBBR), Q_s reflectors retained in ws->Y / ws->W
+    cudaEvent_t t0 = detail::stage_begin(ws);
     kernels::dbbr_reduce(ws, A, ws->B);
+    detail::stage_end(ws, ASE_STAGE_DB, t0);
 
     // Stage 2: band → tridiagonal (bulge chasing), Q_b reflectors retained in ws->U
+    cudaEvent_t t1 = detail::stage_begin(ws);
     kernels::bc_chase(ws, ws->B, ws->d, ws->e);
+    detail::stage_end(ws, ASE_STAGE_BC, t1);
 
     // Stage 3: tridiagonal D&C. A is spent by now and serves as the n×n scratch.
+    cudaEvent_t t2 = detail::stage_begin(ws);
     kernels::tridi_dc(ws, ws->d, ws->e, eval, evec, A);
+    detail::stage_end(ws, ASE_STAGE_DC, t2);
 
-    // Stage 4: back-transform evec = Q_s · Q_b · Q_d
+    // Stage 4: back-transform evec = Q_s · Q_b · Q_d (split into BC-Back/SBR-Back in
+    // backtransform.cu)
     kernels::back_transform(ws, ws->Y, ws->W, ws->U, evec);
 }
 
@@ -71,6 +79,20 @@ void solve_ev(AseHandle* ws, const double* A, int n, double* eval, double* evec)
 
     CUDA_CHECK(cudaStreamSynchronize(ws->stream));
     cusolver::geqrf_check(ws);
+}
+
+void ase_timing_enable(AseHandle* ws, int on) { ws->timing = (on != 0); }
+
+void ase_timing_reset(AseHandle* ws)
+{
+    for (int i = 0; i < ASE_STAGE_COUNT; ++i)
+        ws->timing_ms[i] = 0.0;
+}
+
+void ase_timing_read(AseHandle* ws, double* ms)
+{
+    for (int i = 0; i < ASE_STAGE_COUNT; ++i)
+        ms[i] = ws->timing_ms[i];
 }
 
 } // namespace ase

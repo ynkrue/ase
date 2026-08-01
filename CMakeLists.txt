@@ -52,6 +52,7 @@ add_library(ase
   src/tridi.cu
   src/backtransform.cu
   src/solver.cu
+  src/timing.cu
 )
 add_library(ase::ase ALIAS ase)
 

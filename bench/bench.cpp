@@ -6,8 +6,9 @@
  * host-pointer wrapper, which includes a full host↔device round trip. GFLOPS uses the
  * standard full symmetric eigendecomposition count (22/3)·n³ (JobZ='V', as in LAPACK).
  *
- * Usage: ase_bench [size...] [--iters N] [--host]
+ * Usage: ase_bench [size...] [--iters N] [--host] [--timing]
  *   default sizes: 512 1024 2048 4096 8192 16384 32768
+ *   --timing   also report the per-stage breakdown (DBBR / BC / D&C / BC-Back / SBR-Back)
  *
  * @author  Yannik Rüfenacht
  * @date    2026-08
@@ -48,8 +49,9 @@ void make_symmetric(std::vector<double>& A, int n)
 void usage(const char* argv0)
 {
     fprintf(stderr,
-            "usage: %s [size...] [--iters N] [--host]\n"
-            "  --host   time the host-pointer solution (includes host↔device copies)\n"
+            "usage: %s [size...] [--iters N] [--host] [--timing]\n"
+            "  --host    time the host-pointer solution (includes host↔device copies)\n"
+            "  --timing  report per-stage breakdown (DBBR/BC/DC/BC-Back/SBR-Back, avg ms)\n"
             "  default sizes: 512 1024 2048 4096 8192 16384 32768\n",
             argv0);
 }
@@ -61,11 +63,14 @@ int main(int argc, char** argv)
     std::vector<int> sizes;
     int iters = 3;
     bool host = false;
+    bool timing = false;
     for (int i = 1; i < argc; ++i) {
         if (std::strcmp(argv[i], "--iters") == 0 && i + 1 < argc)
             iters = std::atoi(argv[++i]);
         else if (std::strcmp(argv[i], "--host") == 0)
             host = true;
+        else if (std::strcmp(argv[i], "--timing") == 0)
+            timing = true;
         else if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
             usage(argv[0]);
             return 0;
@@ -76,7 +81,14 @@ int main(int argc, char** argv)
     if (iters < 1) iters = 1;
 
     ase::AseHandle* ws = ase::handle_alloc(0);
-    printf("%-8s %10s %10s %12s\n", "n", host ? "h_time_ms" : "d_time_ms", "GFLOPS", "mem_MB");
+    if (timing) {
+        ase::ase_timing_enable(ws, 1);
+        printf("%-8s %10s %10s %12s   %-9s %-9s %-9s %-9s %-9s\n", "n",
+               host ? "h_time_ms" : "d_time_ms", "GFLOPS", "mem_MB", "DBBR", "BC", "DC", "BCBack",
+               "SBRBack");
+    } else {
+        printf("%-8s %10s %10s %12s\n", "n", host ? "h_time_ms" : "d_time_ms", "GFLOPS", "mem_MB");
+    }
     for (int n : sizes) {
         const size_t bytes = (size_t)n * n * sizeof(double);
         std::vector<double> A((size_t)n * n), eval(n), evec((size_t)n * n);
@@ -100,6 +112,7 @@ int main(int argc, char** argv)
         cudaEventCreate(&t0);
         cudaEventCreate(&t1);
         double best = 1e30;
+        if (timing) ase::ase_timing_reset(ws); // stages accumulate across the iters loop
         for (int it = 0; it < iters; ++it) {
             cudaEventRecord(t0);
             if (host)
@@ -121,8 +134,16 @@ int main(int argc, char** argv)
         }
 
         const double flops = (22.0 / 3.0) * (double)n * n * n;
-        printf("%-8d %10.3f %10.0f %12.1f\n", n, best, flops / (best * 1e-3) / 1e9,
-               bytes / (1024.0 * 1024.0));
+        if (timing) { // stage values are avg ms over the iters
+            double st[ase::ASE_STAGE_COUNT];
+            ase::ase_timing_read(ws, st);
+            printf("%-8d %10.3f %10.0f %12.1f   %-9.3f %-9.3f %-9.3f %-9.3f %-9.3f\n", n, best,
+                   flops / (best * 1e-3) / 1e9, bytes / (1024.0 * 1024.0), st[0] / iters,
+                   st[1] / iters, st[2] / iters, st[3] / iters, st[4] / iters);
+        } else {
+            printf("%-8d %10.3f %10.0f %12.1f\n", n, best, flops / (best * 1e-3) / 1e9,
+                   bytes / (1024.0 * 1024.0));
+        }
     }
     ase::handle_free(ws);
     return 0;

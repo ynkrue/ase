@@ -22,6 +22,7 @@
 #include "common.h"
 #include "handle.h"
 #include "kernels.cuh"
+#include "timing.h"
 #include <algorithm>
 
 // =============================================================================
@@ -299,10 +300,14 @@ void back_transform(AseHandle* ws, const double* Y, const double* W, const doubl
                                  cudaMemcpyDeviceToDevice, ws->stream));
 
     // 2. BC-Back: M ← Q_b · M
+    cudaEvent_t tb = detail::stage_begin(ws);
     bc_back(ws, U, M);
+    detail::stage_end(ws, ASE_STAGE_BCBACK, tb);
 
     // 3. SBR-Back: M ← Q_s · M
+    cudaEvent_t ts = detail::stage_begin(ws);
     sbr_back(ws, Y, W, M);
+    detail::stage_end(ws, ASE_STAGE_SBR, ts);
 
     // 4. evec ← M[:n,:]
     CUDA_CHECK(cudaMemcpy2DAsync(evec, lda * sizeof(double), M, ldm * sizeof(double), n * sizeof(double), n,
