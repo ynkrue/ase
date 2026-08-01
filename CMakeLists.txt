@@ -83,9 +83,25 @@ endif()
 
 if(ASE_BUILD_TESTS)
   enable_testing()
-  add_executable(ase_test test/test.cu)
-  target_link_libraries(ase_test PRIVATE ase)
+
+  include(FetchContent)
+  FetchContent_Declare(googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+    URL_HASH SHA256=8ad598c73ad796e0d8280b082cebd82a630d73e73cd3c70057938a6501bba5d7)
+  FetchContent_MakeAvailable(googletest)
+
+  # Suites: every test/<name>_test.cu becomes an ase_test_<name> CTest case, plus the
+  # full run. Suite names (first TEST arg) must match the file stem.
+  file(GLOB ASE_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/test/*_test.cu")
+  add_executable(ase_test ${ASE_TEST_SOURCES} test/ref.cu)
+  target_include_directories(ase_test PRIVATE ${CMAKE_SOURCE_DIR}/src) # white-box stage tests
+  target_link_libraries(ase_test PRIVATE ase GTest::gtest_main LAPACK::LAPACK)
   set_target_properties(ase_test PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  foreach(src ${ASE_TEST_SOURCES})
+    get_filename_component(base ${src} NAME_WE)
+    string(REPLACE "_test" "" suite ${base})
+    add_test(NAME ase_test_${suite} COMMAND ase_test --gtest_filter=${suite}.*)
+  endforeach()
   add_test(NAME ase_test COMMAND ase_test)
 endif()
 
