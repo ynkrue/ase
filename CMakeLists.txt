@@ -78,7 +78,7 @@ endif()
 # =============================================================================
 if(ASE_BUILD_BENCH)
   add_executable(ase_bench bench/bench.cpp)
-  target_link_libraries(ase_bench PRIVATE ase)
+  target_link_libraries(ase_bench PRIVATE ase CUDA::cudart) # cudaEvent* in main()
 endif()
 
 if(ASE_BUILD_TESTS)
