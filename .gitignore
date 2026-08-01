@@ -11,5 +11,6 @@ docs/html/
 docs/doxygen-warnings.log
 
 # local config
+ref/*
 .claude/scratch/
 CLAUDE.md.local

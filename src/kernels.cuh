@@ -20,12 +20,14 @@
 #include <cuda_runtime.h>
 #include <cusolverDn.h>
 
-namespace ase {
+namespace ase
+{
 
 // =============================================================================
 // ase::kernels — custom GPU kernel launchers
 // =============================================================================
-namespace kernels {
+namespace kernels
+{
 
 // -----------------------------------------------------------------------------
 // DBBR (double-blocking band reduction)
@@ -43,7 +45,7 @@ namespace kernels {
  * @param[in]     n     matrix dimension
  * @param[in]     b     bandwidth
  */
-void dbbr_pack(AseHandle *ws, const double *A, double *B, int n, int b);
+void dbbr_pack(AseHandle* ws, const double* A, double* B, int n, int b);
 
 /**
  * @brief Panel QR + block reflector for one DBBR panel.
@@ -61,7 +63,7 @@ void dbbr_pack(AseHandle *ws, const double *A, double *B, int n, int b);
  * @param[in]     rows  number of rows in the panel (n − j − b)
  * @param[in]     b     panel width (bandwidth)
  */
-void dbbr_panel_qr(AseHandle *ws, double *A, double *Y, int rows, int b);
+void dbbr_panel_qr(AseHandle* ws, double* A, double* Y, int rows, int b);
 
 /**
  * @brief Full DBBR band reduction: symmetric A → band form (bandwidth nbw), in place.
@@ -73,7 +75,7 @@ void dbbr_panel_qr(AseHandle *ws, double *A, double *Y, int rows, int b);
  * @param[in,out] A     n×n symmetric (lower), column-major, lda = ws->n; → band on exit
  * @param[out]    B     packed band buffer, 2b×n column-major
  */
-void dbbr_reduce(AseHandle *ws, double *A, double *B);
+void dbbr_reduce(AseHandle* ws, double* A, double* B);
 
 // -----------------------------------------------------------------------------
 // BC (bulge chasing)
@@ -91,7 +93,7 @@ void dbbr_reduce(AseHandle *ws, double *A, double *B);
  * @param[out]    d     diagonal of tridiagonal, length n
  * @param[out]    e     sub-diagonal of tridiagonal, length n−1
  */
-void bc_chase(AseHandle *ws, double *B, double *d, double *e);
+void bc_chase(AseHandle* ws, double* B, double* d, double* e);
 
 // -----------------------------------------------------------------------------
 // DC (divide-and-conquer tridiagonal eigensolver)
@@ -114,7 +116,7 @@ void bc_chase(AseHandle *ws, double *B, double *d, double *e);
  * @param[out]    evec     eigenvectors Q_d
  * @param[in,out] scratch  device scratch ≥ n×n
  */
-void tridi_dc(AseHandle *ws, double *d, double *e, double *eval, double *evec, double *scratch);
+void tridi_dc(AseHandle* ws, double* d, double* e, double* eval, double* evec, double* scratch);
 
 /**
  * @brief Secular equation solve for one D&C merge (exposed for stage testing).
@@ -132,7 +134,7 @@ void tridi_dc(AseHandle *ws, double *d, double *e, double *eval, double *evec, d
  * @param[in]     rho  rank-1 update scale (|2ρ|)
  * @param[out]    S    k×k assembled eigenvector matrix, column-major, ld = k
  */
-void dc_secular_solve(AseHandle *ws, int k, double rho, double *S);
+void dc_secular_solve(AseHandle* ws, int k, double rho, double* S);
 
 // -----------------------------------------------------------------------------
 // BT (back-transform)
@@ -153,7 +155,7 @@ void dc_secular_solve(AseHandle *ws, int k, double rho, double *S);
  * @param[in,out] evec  in: tridiagonal eigenvectors Q_d (n×n, ld=n);
  *                      out: full eigenvectors Q_s·Q_b·Q_d
  */
-void back_transform(AseHandle *ws, const double *Y, const double *W, const double *U, double *evec);
+void back_transform(AseHandle* ws, const double* Y, const double* W, const double* U, double* evec);
 
 /**
  * @brief BC-Back factor application: M ← Q_b · M (exposed for stage testing).
@@ -161,7 +163,7 @@ void back_transform(AseHandle *ws, const double *Y, const double *W, const doubl
  * @param[in]     U   BC reflectors, ldu×n column-major
  * @param[in,out] M   padded working buffer ws->M, ldu×n (padding rows below n must be zero)
  */
-void bc_back(AseHandle *ws, const double *U, double *M);
+void bc_back(AseHandle* ws, const double* U, double* M);
 
 /**
  * @brief SBR-Back factor application: M ← Q_s · M (exposed for stage testing).
@@ -170,14 +172,15 @@ void bc_back(AseHandle *ws, const double *U, double *M);
  * @param[in]     W   SBR-Back companion W = Y·T, n×n column-major (ld=n)
  * @param[in,out] M   n×n working buffer (ld=ws->ldu)
  */
-void sbr_back(AseHandle *ws, const double *Y, const double *W, double *M);
+void sbr_back(AseHandle* ws, const double* Y, const double* W, double* M);
 
 } // namespace kernels
 
 // =============================================================================
 // cuBLAS dispatching wrappers  (ase::cublas)
 // =============================================================================
-namespace cublas {
+namespace cublas
+{
 
 /**
  * @brief General matrix-matrix multiplication (GEMM). C ← α·op(A)·op(B) + β·C.
@@ -199,9 +202,8 @@ namespace cublas {
  * @param[in,out] C    matrix C, column-major, leading dimension ldc; overwritten with the result
  * @param[in] ldc      leading dimension of C (≥ rows of C)
  */
-void gemm(AseHandle *ws, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k,
-          const double *alpha, const double *A, int lda, const double *B, int ldb,
-          const double *beta, double *C, int ldc);
+void gemm(AseHandle* ws, cublasOperation_t transa, cublasOperation_t transb, int m, int n, int k, const double* alpha,
+          const double* A, int lda, const double* B, int ldb, const double* beta, double* C, int ldc);
 
 /**
  * @brief Symmetric matrix-matrix multiplication: C ← α·A·B + β·C (or B·A if side=right).
@@ -222,9 +224,8 @@ void gemm(AseHandle *ws, cublasOperation_t transa, cublasOperation_t transb, int
  * @param[in,out] C     matrix C, column-major, leading dimension ldc; overwritten with the result
  * @param[in] ldc       leading dimension of C (≥ rows of C)
  */
-void symm(AseHandle *ws, cublasSideMode_t side, cublasFillMode_t uplo, int m, int n,
-          const double *alpha, const double *A, int lda, const double *B, int ldb,
-          const double *beta, double *C, int ldc);
+void symm(AseHandle* ws, cublasSideMode_t side, cublasFillMode_t uplo, int m, int n, const double* alpha,
+          const double* A, int lda, const double* B, int ldb, const double* beta, double* C, int ldc);
 
 /**
  * @brief Symmetric rank-k update: C ← α·op(A)·op(A)ᵀ + β·C.
@@ -243,8 +244,8 @@ void symm(AseHandle *ws, cublasSideMode_t side, cublasFillMode_t uplo, int m, in
  * @param[in,out] C     matrix C, column-major, leading dimension ldc; overwritten with the result
  * @param[in] ldc       leading dimension of C (≥ rows of C)
  */
-void syrk(AseHandle *ws, cublasFillMode_t uplo, cublasOperation_t trans, int n, int k,
-          const double *alpha, const double *A, int lda, const double *beta, double *C, int ldc);
+void syrk(AseHandle* ws, cublasFillMode_t uplo, cublasOperation_t trans, int n, int k, const double* alpha,
+          const double* A, int lda, const double* beta, double* C, int ldc);
 
 /**
  * @brief Symmetric rank-2k update: C ← α·op(A)·op(B)ᵀ + α·op(B)·op(A)ᵀ + β·C.
@@ -266,16 +267,16 @@ void syrk(AseHandle *ws, cublasFillMode_t uplo, cublasOperation_t trans, int n, 
  * @param[in,out] C     matrix C, column-major, leading dimension ldc; overwritten with the result
  * @param[in] ldc       leading dimension of C (≥ rows of C)
  */
-void syr2k(AseHandle *ws, cublasFillMode_t uplo, cublasOperation_t trans, int n, int k,
-           const double *alpha, const double *A, int lda, const double *B, int ldb,
-           const double *beta, double *C, int ldc);
+void syr2k(AseHandle* ws, cublasFillMode_t uplo, cublasOperation_t trans, int n, int k, const double* alpha,
+           const double* A, int lda, const double* B, int ldb, const double* beta, double* C, int ldc);
 
 } // namespace cublas
 
 // =============================================================================
 // cuSOLVER type-dispatching wrappers  (ase::cusolver)
 // =============================================================================
-namespace cusolver {
+namespace cusolver
+{
 
 /**
  * @brief QR factorisation: A ← compact(Q·R), tau ← Householder scalars.
@@ -287,14 +288,14 @@ namespace cusolver {
  * @param[in]     lda     leading dimension of A
  * @param[out]    tau     Householder scalars, length min(m,n)
  */
-void geqrf(AseHandle *ws, int m, int n, double *A, int lda, double *tau);
+void geqrf(AseHandle* ws, int m, int n, double* A, int lda, double* tau);
 
 /**
  * @brief Check the info slots of every geqrf issued so far; aborts on failure.
  *
  * @param[in] ws  solver handle
  */
-void geqrf_check(AseHandle *ws);
+void geqrf_check(AseHandle* ws);
 
 } // namespace cusolver
 

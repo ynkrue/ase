@@ -16,6 +16,15 @@ Every `.cu` and `.cuh` file begins with a Doxygen block:
 
 ---
 
+## Formatting
+
+`.clang-format` is copied from the CSCS SPH-EXA/sphexa style (Allman braces, 4-space
+indent, 120-column limit, left-aligned pointers, aligned consecutive assignments,
+preserved include order). Run `clang-format -i src/*.cu src/*.h src/*.cuh` before
+committing; CI enforces it. See `ref/sphexa/.clang-format` for the upstream source.
+
+---
+
 ## Naming
 
 | Thing | Convention | Example |
