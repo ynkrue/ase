@@ -1,8 +1,5 @@
 # build
 build/
-cmake-build/
-
-# executables
 bin/
 
 # ide
@@ -13,13 +10,7 @@ bin/
 docs/html/
 docs/doxygen-warnings.log
 
-# pre-commit cache
-.cache/
-
-# claude
-.claude/
-CLAUDE.md
-
-# reference
-ref/
-EVD4SC2025_AD/
+# local config
+ref/*
+.claude/scratch/
+CLAUDE.md.local

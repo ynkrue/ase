@@ -1,8 +1,10 @@
 cmake_minimum_required(VERSION 3.25)
-project(cuEV LANGUAGES CXX CUDA)
+project(ASE VERSION 0.1.0 LANGUAGES CXX CUDA)
 
 set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CUDA_STANDARD 17)
+set(CMAKE_CUDA_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
@@ -10,167 +12,116 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
 endif()
 
 if(NOT DEFINED CMAKE_CUDA_ARCHITECTURES)
-  set(CMAKE_CUDA_ARCHITECTURES 80)
+  set(CMAKE_CUDA_ARCHITECTURES 90)
 endif()
 
 # =============================================================================
 # Options
 # =============================================================================
-option(CUEV_ENABLE_MPI    "Build distributed multi-GPU solver" OFF)
-option(CUEV_ENABLE_OMP    "Multithreaded BLAS/LAPACK"          OFF)
-option(CUEV_ENABLE_TESTS  "Build tests"                         ON)
-option(CUEV_ENABLE_BENCH  "Build benchmarks"                    ON)
-option(CUEV_BUILD_DOCS    "Build Doxygen documentation"        OFF)
+# The LAPACK implementation is selected with -DBLA_VENDOR=<...>, e.g.
+# Intel10_64lp (MKL), OpenBLAS, Generic.
+option(ASE_BUILD_TESTS   "Build the test binary"                   ON)
+option(ASE_BUILD_BENCH   "Build the benchmark binary"              ON)
+option(ASE_BUILD_DOCS    "Add the Doxygen `docs` target"           OFF)
+option(ASE_WITH_OPENMP   "Use OpenMP for the D&C solver"           ON)
+option(BUILD_SHARED_LIBS "Build ase as a shared library"           ON)
 
 # =============================================================================
 # Dependencies
 # =============================================================================
 find_package(CUDAToolkit REQUIRED)
-# use multithreaded BLAS/LAPACK
-add_library(cuev_lapack INTERFACE)
-if(CUEV_ENABLE_OMP)
-  set(MKL_INTERFACE lp64)
-  set(MKL_THREADING gnu_thread)
-  find_package(MKL CONFIG)
-endif()
-if(MKL_FOUND)
-  message(STATUS "cuev_lapack: GNU-OpenMP threaded MKL")
-  target_link_libraries(cuev_lapack INTERFACE MKL::MKL)
-else()
-  if(CUEV_ENABLE_OMP)
-    message(WARNING "CUEV_ENABLE_OMP set but MKL not found; falling back to plain LAPACK")
-  endif()
-  find_package(LAPACK REQUIRED)
-  target_link_libraries(cuev_lapack INTERFACE LAPACK::LAPACK)
-endif()
-if(CUEV_ENABLE_MPI)
-  find_package(MPI REQUIRED)
+find_package(LAPACK REQUIRED)
 
-  # nvhpc libraries - set NCCL_ROOT / CUBLASMP_ROOT / CUSOLVERMP_ROOT
-  find_library(NCCL_LIB       nccl       REQUIRED)
-  find_library(CUBLASMP_LIB   cublasmp   REQUIRED)
-  find_library(CUSOLVERMP_LIB cusolverMp REQUIRED)
-  find_path(NCCL_INC       nccl.h       REQUIRED)
-  find_path(CUBLASMP_INC   cublasmp.h   REQUIRED)
-  find_path(CUSOLVERMP_INC cusolverMp.h REQUIRED)
-
-  add_library(NCCL::NCCL             INTERFACE IMPORTED)
-  target_link_libraries(NCCL::NCCL           INTERFACE "${NCCL_LIB}")
-  target_include_directories(NCCL::NCCL     INTERFACE "${NCCL_INC}")
-
-  add_library(cuBLASMp::cuBLASMp     INTERFACE IMPORTED)
-  target_link_libraries(cuBLASMp::cuBLASMp   INTERFACE "${CUBLASMP_LIB}")
-  target_include_directories(cuBLASMp::cuBLASMp INTERFACE "${CUBLASMP_INC}")
-
-  add_library(cuSOLVERMp::cuSOLVERMp INTERFACE IMPORTED)
-  target_link_libraries(cuSOLVERMp::cuSOLVERMp INTERFACE "${CUSOLVERMP_LIB}")
-  target_include_directories(cuSOLVERMp::cuSOLVERMp INTERFACE "${CUSOLVERMP_INC}")
-endif()
-
-# =============================================================================
-# cuev — single-GPU library
-# =============================================================================
-if(NOT CUEV_ENABLE_MPI)
-  add_library(cuev SHARED
-    src/cuda/handle.cu
-    src/cuda/cublas.cu
-    src/cuda/cusolver.cu
-    src/cuda/dbbr.cu
-    src/cuda/bulge.cu
-    src/cuda/tridi.cu
-    src/cuda/backtransform.cu
-    src/cuda/solver.cu
-  )
-  target_include_directories(cuev PUBLIC include)
-  target_link_libraries(cuev PUBLIC CUDA::cublas CUDA::cusolver cuev_lapack)
-  set_target_properties(cuev PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    POSITION_INDEPENDENT_CODE  ON)
-  # OpenMP for the host-side D&C merge loops (secular roots / eigenvector recon).
-  find_package(OpenMP)
-  if(OpenMP_CXX_FOUND)
-    target_link_libraries(cuev PUBLIC OpenMP::OpenMP_CXX)
-    target_compile_options(cuev PRIVATE
-      $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>)
+if(ASE_WITH_OPENMP)
+  find_package(OpenMP COMPONENTS CXX)
+  if(NOT OpenMP_CXX_FOUND)
+    message(WARNING "ASE_WITH_OPENMP=ON but OpenMP not found, thus we stay serial")
   endif()
 endif()
 
 # =============================================================================
-# cuev_mp — distributed library
+# ase — symmetric eigensolver library
 # =============================================================================
-if(CUEV_ENABLE_MPI)
-  add_library(cuev_mp SHARED
-    src/mp/handle_mp.cu
-    src/mp/cublas_mp.cu
-    src/mp/cusolver_mp.cu
-    src/mp/dbbr_mp.cu
-    src/mp/bulge_mp.cu
-    src/mp/backtransform_mp.cu
-    src/mp/solver_mp.cu
-  )
-  target_include_directories(cuev_mp PUBLIC include)
-  target_compile_definitions(cuev_mp PUBLIC CUEV_ENABLE_MPI)
-  target_link_libraries(cuev_mp PUBLIC
-    CUDA::cublas CUDA::cusolver
-    MPI::MPI_CXX NCCL::NCCL
-    CUBLASMp::CUBLASMp CUSOLVERMp::CUSOLVERMp)
-  set_target_properties(cuev_mp PROPERTIES
-    CUDA_SEPARABLE_COMPILATION ON
-    POSITION_INDEPENDENT_CODE  ON)
+add_library(ase
+  src/handle.cu
+  src/cublas.cu
+  src/cusolver.cu
+  src/dbbr.cu
+  src/bulge.cu
+  src/secular.cu
+  src/tridi.cu
+  src/backtransform.cu
+  src/solver.cu
+  src/timing.cu
+)
+add_library(ase::ase ALIAS ase)
+
+target_include_directories(ase
+  PUBLIC  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}/src)
+
+target_link_libraries(ase
+  PUBLIC  CUDA::cublas CUDA::cusolver
+  PRIVATE LAPACK::LAPACK)
+
+set_target_properties(ase PROPERTIES
+  CUDA_SEPARABLE_COMPILATION ON
+  POSITION_INDEPENDENT_CODE  ON)
+
+if(ASE_WITH_OPENMP AND OpenMP_CXX_FOUND)
+  target_link_libraries(ase PRIVATE OpenMP::OpenMP_CXX)
+  target_compile_options(ase PRIVATE
+    $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=${OpenMP_CXX_FLAGS}>)
 endif()
 
 # =============================================================================
-# Benchmarks
+# Benchmarks / tests
 # =============================================================================
-if(CUEV_ENABLE_BENCH)
-  if(NOT CUEV_ENABLE_MPI)
-    add_executable(cuBench bench/bench.cpp)
-    target_link_libraries(cuBench PRIVATE cuev CUDA::cudart CUDA::cublas CUDA::cusolver)
-    add_executable(cuBenchSolver bench/bench_solver.cpp)
-    target_link_libraries(cuBenchSolver PRIVATE cuev CUDA::cudart CUDA::cublas CUDA::cusolver)
-  # else()
-  #   add_executable(cuBenchMp   bench/bench_mp.cpp)
-  #   target_link_libraries(cuBenchMp   PRIVATE cuev_mp CUDA::cudart MPI::MPI_CXX)
-  #   add_executable(cuBenchCuev bench/bench_cuev.cpp)
-  #   target_link_libraries(cuBenchCuev PRIVATE cuev_mp CUDA::cudart MPI::MPI_CXX)
-  endif()
+if(ASE_BUILD_BENCH)
+  add_executable(ase_bench bench/bench.cpp)
+  target_link_libraries(ase_bench PRIVATE ase CUDA::cudart) # cudaEvent* in main()
 endif()
 
-# =============================================================================
-# Tests
-# =============================================================================
-if(CUEV_ENABLE_TESTS)
-  if(NOT CUEV_ENABLE_MPI)
-    add_executable(cuTest
-      test/cuda/test_dbbr.cu
-      test/cuda/test_bulge.cu
-      test/cuda/test_backtransform.cu
-      test/cuda/test_tridi.cu
-    )
-    target_link_libraries(cuTest PRIVATE cuev CUDA::cudart CUDA::cublas CUDA::cusolver)
-    set_target_properties(cuTest PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-  # else()
-  #   add_executable(cuTestMp
-  #     test/mp/test_mp.cpp
-  #   )
-  #   target_link_libraries(cuTestMp PRIVATE cuev_mp CUDA::cudart MPI::MPI_CXX)
-  #   set_target_properties(cuTestMp PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
-  endif()
+if(ASE_BUILD_TESTS)
+  enable_testing()
+
+  include(FetchContent)
+  FetchContent_Declare(googletest
+    URL https://github.com/google/googletest/archive/refs/tags/v1.14.0.tar.gz
+    URL_HASH SHA256=8ad598c73ad796e0d8280b082cebd82a630d73e73cd3c70057938a6501bba5d7)
+  FetchContent_MakeAvailable(googletest)
+
+  # Suites: every test/<name>_test.cu becomes an ase_test_<name> CTest case, plus the
+  # full run. Suite names (first TEST arg) must match the file stem.
+  file(GLOB ASE_TEST_SOURCES CONFIGURE_DEPENDS "${CMAKE_SOURCE_DIR}/test/*_test.cu")
+  add_executable(ase_test ${ASE_TEST_SOURCES} test/ref.cu)
+  target_include_directories(ase_test PRIVATE ${CMAKE_SOURCE_DIR}/src) # white-box stage tests
+  target_link_libraries(ase_test PRIVATE ase GTest::gtest_main LAPACK::LAPACK)
+  set_target_properties(ase_test PROPERTIES CUDA_SEPARABLE_COMPILATION ON)
+  foreach(src ${ASE_TEST_SOURCES})
+    get_filename_component(base ${src} NAME_WE)
+    string(REPLACE "_test" "" suite ${base})
+    add_test(NAME ase_test_${suite} COMMAND ase_test --gtest_filter=${suite}.*)
+  endforeach()
+  add_test(NAME ase_test COMMAND ase_test)
 endif()
 
 # =============================================================================
 # Doxygen
 # =============================================================================
-if(CUEV_BUILD_DOCS)
+if(ASE_BUILD_DOCS)
   find_package(Doxygen QUIET OPTIONAL_COMPONENTS dot)
   if(DOXYGEN_FOUND)
-    set(DOXYGEN_PROJECT_NAME        "cuEV")
-    set(DOXYGEN_PROJECT_BRIEF       "CUDA symmetric dense eigensolver")
-    set(DOXYGEN_EXTRACT_ALL         YES)
-    set(DOXYGEN_BUILTIN_STL_SUPPORT YES)
-    set(DOXYGEN_WARN_IF_UNDOCUMENTED NO)
-    set(DOXYGEN_OUTPUT_DIRECTORY    "${CMAKE_BINARY_DIR}/docs")
-    doxygen_add_docs(docs include src)
+    add_custom_target(docs
+      COMMAND           ${DOXYGEN_EXECUTABLE} ${CMAKE_SOURCE_DIR}/Doxyfile
+      WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+      COMMENT           "Running Doxygen -> ${CMAKE_SOURCE_DIR}/docs/html")
+    if(NOT EXISTS ${CMAKE_SOURCE_DIR}/doxygen/doxygen-awesome.css)
+      message(WARNING "doxygen/ submodule not checked out; docs will be unstyled. "
+                      "Run: git submodule update --init")
+    endif()
+  else()
+    message(WARNING "ASE_BUILD_DOCS=ON but Doxygen not found; no `docs` target")
   endif()
 endif()
 
@@ -179,15 +130,39 @@ endif()
 # =============================================================================
 find_program(CLANG_FORMAT clang-format)
 if(CLANG_FORMAT)
-  file(GLOB_RECURSE FORMAT_SOURCES
-    "${CMAKE_SOURCE_DIR}/src/*.cu"
-    "${CMAKE_SOURCE_DIR}/src/*.cpp"
-    "${CMAKE_SOURCE_DIR}/include/*.cuh"
-    "${CMAKE_SOURCE_DIR}/include/*.h"
-    "${CMAKE_SOURCE_DIR}/bench/*.cpp"
-    "${CMAKE_SOURCE_DIR}/test/*.cpp"
-  )
+  file(GLOB_RECURSE ASE_FORMAT_SOURCES
+    "${CMAKE_SOURCE_DIR}/include/ase/*.h"
+    "${CMAKE_SOURCE_DIR}/src/*.cu"      "${CMAKE_SOURCE_DIR}/src/*.cuh"
+    "${CMAKE_SOURCE_DIR}/src/*.h"
+    "${CMAKE_SOURCE_DIR}/test/*.cu"     "${CMAKE_SOURCE_DIR}/test/*.h"
+    "${CMAKE_SOURCE_DIR}/bench/*.cpp"   "${CMAKE_SOURCE_DIR}/bench/*.h")
   add_custom_target(format
-    COMMAND ${CLANG_FORMAT} -i ${FORMAT_SOURCES}
-    COMMENT "Running clang-format")
+    COMMAND ${CLANG_FORMAT} -i ${ASE_FORMAT_SOURCES}
+    COMMENT "clang-format -i")
+  add_custom_target(format-check
+    COMMAND ${CLANG_FORMAT} --dry-run --Werror ${ASE_FORMAT_SOURCES}
+    COMMENT "clang-format --dry-run --Werror")
+else()
+  message(STATUS "clang-format not found; no `format` / `format-check` targets")
 endif()
+
+# =============================================================================
+# Configure summary
+# =============================================================================
+message(STATUS "")
+message(STATUS "ASE ${PROJECT_VERSION}")
+message(STATUS "  build type        ${CMAKE_BUILD_TYPE}")
+if(BUILD_SHARED_LIBS)
+  message(STATUS "  library           shared")
+else()
+  message(STATUS "  library           static")
+endif()
+message(STATUS "  CUDA compiler     ${CMAKE_CUDA_COMPILER}")
+message(STATUS "  CUDA toolkit      ${CUDAToolkit_VERSION}")
+message(STATUS "  CUDA architecture ${CMAKE_CUDA_ARCHITECTURES}")
+message(STATUS "  CUDA flags        ${CMAKE_CUDA_FLAGS}")
+message(STATUS "  LAPACK            ${LAPACK_LIBRARIES}")
+message(STATUS "  OpenMP            ${OpenMP_CXX_FOUND}")
+message(STATUS "  tests / bench     ${ASE_BUILD_TESTS} / ${ASE_BUILD_BENCH}")
+message(STATUS "  docs              ${ASE_BUILD_DOCS}")
+message(STATUS "")

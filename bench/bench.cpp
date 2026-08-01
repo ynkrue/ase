@@ -1,191 +1,150 @@
 /**
  * @file   bench.cpp
- * @brief  Benchmark cuev::symm_eig_solve vs cuSOLVER dsyevd / ssyevd.
+ * @brief  Benchmark ase::solve_ev over matrix sizes, reporting best-of-N time and GFLOPS.
  *
- * Usage: cuBench [--n N] [--warmup W] [--iters I]
+ * Defaults to the device path (solve_ev_d, matrix resident on the GPU); --host times the
+ * host-pointer wrapper, which includes a full host↔device round trip. GFLOPS uses the
+ * standard full symmetric eigendecomposition count (22/3)·n³ (JobZ='V', as in LAPACK).
+ *
+ * Usage: ase_bench [size...] [--iters N] [--host] [--timing]
+ *   default sizes: 512 1024 2048 4096 8192 16384 32768
+ *   --timing   also report the per-stage breakdown (DBBR / BC / D&C / BC-Back / SBR-Back)
  *
  * @author  Yannik Rüfenacht
- * @date    2026-06
+ * @date    2026-08
  */
 
-#include "common.h"
-#include "cuda/handle.h"
-#include "cuev.h"
+#include <ase/ase.h>
+
+#include <algorithm>
+#include <chrono>
+#include <cmath>
 #include <cstdio>
+#include <cstdlib>
 #include <cstring>
-#include <cublas_v2.h>
-#include <cuda.h>
-#include <cuda_runtime.h>
-#include <cusolverDn.h>
-#include <type_traits>
 #include <vector>
 
-// =============================================================================
-// Utilities
-// =============================================================================
+#include <cuda_runtime.h>
 
-struct GpuTimer {
-    cudaEvent_t start, stop;
-    GpuTimer() {
-        cudaEventCreate(&start);
-        cudaEventCreate(&stop);
-    }
-    ~GpuTimer() {
-        cudaEventDestroy(start);
-        cudaEventDestroy(stop);
-    }
-    void begin(cudaStream_t s) {
-        cudaEventRecord(start, s);
-    }
-    float end(cudaStream_t s) {
-        cudaEventRecord(stop, s);
-        cudaEventSynchronize(stop);
-        float ms = 0.f;
-        cudaEventElapsedTime(&ms, start, stop);
-        return ms;
-    }
-};
+namespace
+{
 
-template <typename T> static void fill_symmetric(std::vector<T> &h, int n) {
-    for (int i = 0; i < n; ++i)
-        for (int j = i; j < n; ++j)
-            h[i * n + j] = h[j * n + i] = (T)(rand() % 200 - 100) / T(100);
-}
-
-// =============================================================================
-// cuSOLVER reference
-// =============================================================================
-
-template <typename T>
-static float bench_cusolver(cusolverDnHandle_t handle, int n, int warmup, int iters,
-                            cudaStream_t stream) {
-    std::vector<T> hA(n * n);
-    fill_symmetric(hA, n);
-
-    T *dA, *d_eval, *d_work;
-    int *d_info;
-    CUDA_CHECK(cudaMalloc(&dA, n * n * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_eval, n * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_info, sizeof(int)));
-
-    int lwork = 0;
-    if constexpr (std::is_same_v<T, float>) {
-        CUSOLVER_CHECK(cusolverDnSsyevd_bufferSize(
-            handle, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, n, dA, n, d_eval, &lwork));
-    } else {
-        CUSOLVER_CHECK(cusolverDnDsyevd_bufferSize(
-            handle, CUSOLVER_EIG_MODE_VECTOR, CUBLAS_FILL_MODE_LOWER, n, dA, n, d_eval, &lwork));
-    }
-    CUDA_CHECK(cudaMalloc(&d_work, lwork * sizeof(T)));
-
-    auto run = [&] {
-        CUDA_CHECK(cudaMemcpy(dA, hA.data(), n * n * sizeof(T), cudaMemcpyHostToDevice));
-        if constexpr (std::is_same_v<T, float>) {
-            CUSOLVER_CHECK(cusolverDnSsyevd(handle, CUSOLVER_EIG_MODE_VECTOR,
-                                            CUBLAS_FILL_MODE_LOWER, n, dA, n, d_eval, d_work, lwork,
-                                            d_info));
-        } else {
-            CUSOLVER_CHECK(cusolverDnDsyevd(handle, CUSOLVER_EIG_MODE_VECTOR,
-                                            CUBLAS_FILL_MODE_LOWER, n, dA, n, d_eval, d_work, lwork,
-                                            d_info));
+// Deterministic symmetric matrix with entries in (-1, 1) — lower triangle mirrored to
+// the upper so A is exactly symmetric.
+void make_symmetric(std::vector<double>& A, int n)
+{
+    unsigned s = 1;
+    auto rnd = [&]() {
+        s = s * 1664525u + 1013904223u;
+        return ((double)(s >> 8) / 16777216.0) * 2.0 - 1.0;
+    };
+    for (int c = 0; c < n; ++c)
+        for (int r = c; r < n; ++r) {
+            const double v = rnd();
+            A[(size_t)c * n + r] = v;
+            A[(size_t)r * n + c] = v;
         }
-    };
-
-    for (int i = 0; i < warmup; ++i)
-        run();
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    GpuTimer timer;
-    timer.begin(stream);
-    for (int i = 0; i < iters; ++i)
-        run();
-    float ms = timer.end(stream);
-
-    CUDA_CHECK(cudaFree(dA));
-    CUDA_CHECK(cudaFree(d_eval));
-    CUDA_CHECK(cudaFree(d_work));
-    CUDA_CHECK(cudaFree(d_info));
-    return ms / iters;
 }
 
-// =============================================================================
-// cuev
-// =============================================================================
-
-template <typename T> static float bench_cuev(int n, int warmup, int iters, cudaStream_t stream) {
-    std::vector<T> hA(n * n);
-    fill_symmetric(hA, n);
-
-    T *dA, *d_eval, *d_evec;
-    CUDA_CHECK(cudaMalloc(&dA, n * n * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_eval, n * sizeof(T)));
-    CUDA_CHECK(cudaMalloc(&d_evec, n * n * sizeof(T)));
-
-    auto run = [&] {
-        CUDA_CHECK(cudaMemcpy(dA, hA.data(), n * n * sizeof(T), cudaMemcpyHostToDevice));
-        cuev::symm_eig_solve<T>(dA, n, d_eval, d_evec, stream);
-    };
-
-    for (int i = 0; i < warmup; ++i)
-        run();
-    CUDA_CHECK(cudaStreamSynchronize(stream));
-
-    GpuTimer timer;
-    timer.begin(stream);
-    for (int i = 0; i < iters; ++i)
-        run();
-    float ms = timer.end(stream);
-
-    CUDA_CHECK(cudaFree(dA));
-    CUDA_CHECK(cudaFree(d_eval));
-    CUDA_CHECK(cudaFree(d_evec));
-    return ms / iters;
+void usage(const char* argv0)
+{
+    fprintf(stderr,
+            "usage: %s [size...] [--iters N] [--host] [--timing]\n"
+            "  --host    time the host-pointer solution (includes host↔device copies)\n"
+            "  --timing  report per-stage breakdown (DBBR/BC/DC/BC-Back/SBR-Back, avg ms)\n"
+            "  default sizes: 512 1024 2048 4096 8192 16384 32768\n",
+            argv0);
 }
 
-// =============================================================================
-// main
-// =============================================================================
+} // namespace
 
-template <typename T>
-static void run_suite(cusolverDnHandle_t cusolver, int n, int warmup, int iters,
-                      cudaStream_t stream) {
-    const char *prec = std::is_same_v<T, float> ? "fp32" : "fp64";
-    printf("=== solve %s  n=%d ===\n", prec, n);
-
-    double flops = 4.0 / 3.0 * (double)n * n * n;
-
-    float ms_ref = bench_cusolver<T>(cusolver, n, warmup, iters, stream);
-    float ms_cuev = bench_cuev<T>(n, warmup, iters, stream);
-
-    printf("  %-28s  %8.3f ms   %6.3f TFLOP/s\n",
-           std::is_same_v<T, float> ? "cusolver_ssyevd" : "cusolver_dsyevd", ms_ref,
-           flops / (ms_ref * 1e-3) / 1e12);
-    printf("  %-28s  %8.3f ms   %6.3f TFLOP/s\n",
-           std::is_same_v<T, float> ? "cuev_symm_eig_solve<float>" : "cuev_symm_eig_solve<double>",
-           ms_cuev, flops / (ms_cuev * 1e-3) / 1e12);
-    printf("\n");
-}
-
-int main(int argc, char **argv) {
-    int n = 4096, warmup = 1, iters = 3;
+int main(int argc, char** argv)
+{
+    std::vector<int> sizes;
+    int iters = 3;
+    bool host = false;
+    bool timing = false;
     for (int i = 1; i < argc; ++i) {
-        if (!strcmp(argv[i], "--n") && i + 1 < argc) n = atoi(argv[++i]);
-        if (!strcmp(argv[i], "--warmup") && i + 1 < argc) warmup = atoi(argv[++i]);
-        if (!strcmp(argv[i], "--iters") && i + 1 < argc) iters = atoi(argv[++i]);
+        if (std::strcmp(argv[i], "--iters") == 0 && i + 1 < argc)
+            iters = std::atoi(argv[++i]);
+        else if (std::strcmp(argv[i], "--host") == 0)
+            host = true;
+        else if (std::strcmp(argv[i], "--timing") == 0)
+            timing = true;
+        else if (std::strcmp(argv[i], "-h") == 0 || std::strcmp(argv[i], "--help") == 0) {
+            usage(argv[0]);
+            return 0;
+        } else
+            sizes.push_back(std::atoi(argv[i]));
     }
-    printf("cuBench  n=%d  warmup=%d  iters=%d\n\n", n, warmup, iters);
+    if (sizes.empty()) sizes = {512, 1024, 2048, 4096, 8192, 16384, 32768};
+    if (iters < 1) iters = 1;
 
-    cudaStream_t stream;
-    CUDA_CHECK(cudaStreamCreate(&stream));
+    ase::AseHandle* ws = ase::handle_alloc(0);
+    if (timing) {
+        ase::ase_timing_enable(ws, 1);
+        printf("%-8s %10s %10s %12s   %-9s %-9s %-9s %-9s %-9s\n", "n",
+               host ? "h_time_ms" : "d_time_ms", "GFLOPS", "mem_MB", "DBBR", "BC", "DC", "BCBack",
+               "SBRBack");
+    } else {
+        printf("%-8s %10s %10s %12s\n", "n", host ? "h_time_ms" : "d_time_ms", "GFLOPS", "mem_MB");
+    }
+    for (int n : sizes) {
+        const size_t bytes = (size_t)n * n * sizeof(double);
+        std::vector<double> A((size_t)n * n), eval(n), evec((size_t)n * n);
+        make_symmetric(A, n);
 
-    cusolverDnHandle_t cusolver;
-    CUSOLVER_CHECK(cusolverDnCreate(&cusolver));
-    CUSOLVER_CHECK(cusolverDnSetStream(cusolver, stream));
+        // device-resident input for the solve_ev_d path
+        double* dA = nullptr;
+        double* deval = nullptr;
+        double* devec = nullptr;
+        if (!host) {
+            if (cudaMalloc(&dA, bytes) != cudaSuccess) { // e.g. this size spills the GPU
+                printf("%-8d %10s\n", n, "skip (OOM)");
+                continue;
+            }
+            cudaMalloc(&deval, (size_t)n * sizeof(double));
+            cudaMalloc(&devec, bytes);
+            cudaMemcpy(dA, A.data(), bytes, cudaMemcpyHostToDevice);
+        }
 
-    run_suite<float>(cusolver, n, warmup, iters, stream);
-    run_suite<double>(cusolver, n, warmup, iters, stream);
+        cudaEvent_t t0, t1;
+        cudaEventCreate(&t0);
+        cudaEventCreate(&t1);
+        double best = 1e30;
+        if (timing) ase::ase_timing_reset(ws); // stages accumulate across the iters loop
+        for (int it = 0; it < iters; ++it) {
+            cudaEventRecord(t0);
+            if (host)
+                ase::solve_ev(ws, A.data(), n, eval.data(), evec.data());
+            else
+                ase::solve_ev_d(ws, dA, n, deval, devec);
+            cudaEventRecord(t1);
+            cudaEventSynchronize(t1);
+            float ms = 0.f;
+            cudaEventElapsedTime(&ms, t0, t1);
+            best = std::min(best, (double)ms);
+        }
+        cudaEventDestroy(t0);
+        cudaEventDestroy(t1);
+        if (!host) {
+            cudaFree(dA);
+            cudaFree(deval);
+            cudaFree(devec);
+        }
 
-    CUSOLVER_CHECK(cusolverDnDestroy(cusolver));
-    CUDA_CHECK(cudaStreamDestroy(stream));
+        const double flops = (22.0 / 3.0) * (double)n * n * n;
+        if (timing) { // stage values are avg ms over the iters
+            double st[ase::ASE_STAGE_COUNT];
+            ase::ase_timing_read(ws, st);
+            printf("%-8d %10.3f %10.0f %12.1f   %-9.3f %-9.3f %-9.3f %-9.3f %-9.3f\n", n, best,
+                   flops / (best * 1e-3) / 1e9, bytes / (1024.0 * 1024.0), st[0] / iters,
+                   st[1] / iters, st[2] / iters, st[3] / iters, st[4] / iters);
+        } else {
+            printf("%-8d %10.3f %10.0f %12.1f\n", n, best, flops / (best * 1e-3) / 1e9,
+                   bytes / (1024.0 * 1024.0));
+        }
+    }
+    ase::handle_free(ws);
     return 0;
 }

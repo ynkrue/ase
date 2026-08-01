@@ -1,12 +1,18 @@
 DOXYFILE_ENCODING      = UTF-8
-PROJECT_NAME           = "cuEV"
+PROJECT_NAME           = "ASE"
 PROJECT_BRIEF          = "CUDA symmetric dense eigensolver"
 OUTPUT_DIRECTORY       = docs
-INPUT                  = include src
+
+# Public surface only. src/ holds kernel implementations and internal helpers; documenting
+# them here would present them as part of the API. Set EXTRACT_ALL=YES and add src to INPUT
+# to generate internal docs instead.
+INPUT                  = include
 RECURSIVE              = YES
-EXTRACT_ALL            = YES
+EXTRACT_ALL            = NO
+EXTRACT_STATIC         = NO
+HIDE_UNDOC_MEMBERS     = YES
 BUILTIN_STL_SUPPORT    = YES
-WARN_IF_UNDOCUMENTED   = NO
+WARN_IF_UNDOCUMENTED   = YES
 
 # File patterns — pick up .h, .cuh, and .cu source files
 FILE_PATTERNS          = *.h *.cuh *.cu *.cpp

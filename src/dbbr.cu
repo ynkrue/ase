@@ -7,14 +7,15 @@
  */
 
 #include "common.h"
-#include "cuda/handle.h"
-#include "cuda/kernels.cuh"
-#include <type_traits>
+#include "handle.h"
+#include "kernels.cuh"
+#include <algorithm>
 
 // =============================================================================
 // Device kernels
 // =============================================================================
-namespace {
+namespace
+{
 
 /**
  * @brief Pack the lower band of n×n matrix into a 2b-row packed band.
@@ -28,14 +29,15 @@ namespace {
  * @param[in]  b    bandwidth
  * @param[in]  lda  leading dimension of A
  */
-template <typename T> __global__ void bc_pack_kernel(const T *A, T *Bp, int n, int b, int lda) {
+__global__ void bc_pack_kernel(const double* A, double* Bp, int n, int b, int lda)
+{
     const int ldb = 2 * b;
-    int r = blockIdx.x * blockDim.x + threadIdx.x;
-    int j = blockIdx.y * blockDim.y + threadIdx.y;
+    int       r   = blockIdx.x * blockDim.x + threadIdx.x;
+    int       j   = blockIdx.y * blockDim.y + threadIdx.y;
     if (r >= ldb || j >= n) return;
 
-    int i = j + r;
-    Bp[r + j * ldb] = (r <= b && i < n) ? A[i + (size_t)j * lda] : T(0);
+    int i           = j + r;
+    Bp[r + j * ldb] = (r <= b && i < n) ? A[i + (size_t)j * lda] : 0.0;
 }
 
 /**
@@ -52,18 +54,17 @@ template <typename T> __global__ void bc_pack_kernel(const T *A, T *Bp, int n, i
  * @param[in]  cols  columns in the panel (bandwidth b)
  * @param[in]  lda   leading dimension of A and Y (= ws->n)
  */
-template <typename T>
-__launch_bounds__(256) __global__
-    void dbbr_extract_reflectors(const T *A, T *Y, int rows, int cols, int lda) {
+__launch_bounds__(256) __global__ void dbbr_extract_reflectors(const double* A, double* Y, int rows, int cols, int lda)
+{
     int r = blockIdx.x * blockDim.x + threadIdx.x;
     int c = blockIdx.y * blockDim.y + threadIdx.y;
     if (r >= rows || c >= cols) return;
 
-    T v;
+    double v;
     if (r < c)
-        v = T(0);
+        v = 0.0;
     else if (r == c)
-        v = T(1);
+        v = 1.0;
     else
         v = A[c * lda + r];
 
@@ -83,24 +84,26 @@ __launch_bounds__(256) __global__
  * @param[out] Tri  b×b block factor, column-major, ldt = b
  * @param[in]  b    panel width (≤ 64)
  */
-template <typename T> __global__ void dbbr_larft(const T *G, const T *tau, T *Tri, int b) {
-    __shared__ T sT[64 * 64];
-    const int tid = threadIdx.x;
+__global__ void dbbr_larft(const double* G, const double* tau, double* Tri, int b)
+{
+    __shared__ double sT[64 * 64];
+    const int         tid = threadIdx.x;
 
     for (int c = 0; c < b; ++c)
-        sT[tid + c * b] = T(0);
+        sT[tid + c * b] = 0.0;
     __syncthreads();
 
     // Columns of T are built left to right; column i needs columns 0..i-1.
-    for (int i = 0; i < b; ++i) {
-        if (tid < i) {
-            T acc = T(0);
+    for (int i = 0; i < b; ++i)
+    {
+        if (tid < i)
+        {
+            double acc = 0.0;
             for (int q = tid; q < i; ++q)
                 acc += sT[tid + q * b] * G[q + i * b]; // T[p,q]·G[q,i]
             sT[tid + i * b] = -tau[i] * acc;
-        } else if (tid == i) {
-            sT[tid + i * b] = tau[i];
         }
+        else if (tid == i) { sT[tid + i * b] = tau[i]; }
         __syncthreads();
     }
 
@@ -110,134 +113,129 @@ template <typename T> __global__ void dbbr_larft(const T *G, const T *tau, T *Tr
 
 } // namespace
 
-namespace cuev {
-namespace kernels {
+namespace ase
+{
+namespace kernels
+{
 
-template <typename T> void dbbr_pack(SolverHandle<T> *ws, const T *A, T *Bp, int n, int b) {
-    const int lda = ws->n;
+void dbbr_pack(AseHandle* ws, const double* A, double* Bp, int n, int b)
+{
+    const int     lda = ws->n;
     constexpr int BX = 32, BY = 8;
-    dim3 block(BX, BY);
-    dim3 grid(div_up(2 * b, BX), div_up(n, BY));
+    dim3          block(BX, BY);
+    dim3          grid(div_up(2 * b, BX), div_up(n, BY));
     bc_pack_kernel<<<grid, block, 0, ws->stream>>>(A, Bp, n, b, lda);
 }
 
-template <typename T> void dbbr_panel_qr(SolverHandle<T> *ws, T *A, T *Y, int rows, int b) {
+void dbbr_panel_qr(AseHandle* ws, double* A, double* Y, int rows, int b)
+{
     const int lda = ws->n;
 
     // QR factorization: R in upper triangle of A, Householder vectors
     // below the diagonal, scalars into ws->tau.
-    cusolver::geqrf(ws, rows, b, A, lda, ws->tau, ws->stream);
+    cusolver::geqrf(ws, rows, b, A, lda, ws->tau);
 
     // extract lower-trapezoidal reflectors  A → Y
     constexpr int BX = 64, BY = 4;
-    dim3 block(BX, BY);
-    dim3 grid(div_up(rows, BX), div_up(b, BY));
+    dim3          block(BX, BY);
+    dim3          grid(div_up(rows, BX), div_up(b, BY));
     dbbr_extract_reflectors<<<grid, block, 0, ws->stream>>>(A, Y, rows, b, lda);
 
     // larft: build b×b block factor T from Y and ws->tau into ws->Tri
     //   Gram matrix G = Yᵀ·Y with syrk → ws->Dwk
-    const T one = T(1), zero = T(0);
+    const double one = 1.0, zero = 0.0;
     cublas::syrk(ws, CUBLAS_FILL_MODE_UPPER, CUBLAS_OP_T, b, rows, &one, Y, lda, &zero, ws->Dwk, b);
     //   triangular recurrence → ws->Tri
     dbbr_larft<<<1, b, 0, ws->stream>>>(ws->Dwk, ws->tau, ws->Tri, b);
 }
 
-template <typename T> void dbbr_reduce(SolverHandle<T> *ws, T *A, T *B) {
-    int n = ws->n, b = ws->nbw, k = ws->nk;
-    int lda = ws->n;
-    T zero = T(0);
-    T one = T(1);
-    T neg1 = T(-1);
-    T neg_half = T(-0.5);
+void dbbr_reduce(AseHandle* ws, double* A, double* B)
+{
+    int    n = ws->n, b = ws->nbw, k = ws->nk;
+    int    lda      = ws->n;
+    double zero     = 0.0;
+    double one      = 1.0;
+    double neg1     = -1.0;
+    double neg_half = -0.5;
 
     // outer (block) loop
-    for (int i = 0; i < n; i += k) {
-        int kc = std::min(k, n - i); // current block width
-        int block_cols = 0;          // reflector columns Y/Z accumulated so far in this block
+    for (int i = 0; i < n; i += k)
+    {
+        int kc         = std::min(k, n - i); // current block width
+        int block_cols = 0;                  // reflector columns Y/Z accumulated so far in this block
 
         // inner (panel) loop
-        for (int j = i; j < i + kc && j + b < n; j += b) {
-            int pc = std::min(b, n - j); // current panel width
+        for (int j = i; j < i + kc && j + b < n; j += b)
+        {
+            int pc   = std::min(b, n - j); // current panel width
             int rows = n - (j + pc);
-            int off = j * lda + (j + pc);
-            int tr = (j + pc) * lda + (j + pc);
-            int zc = (j - i) * lda + (j + pc);
+            int off  = j * lda + (j + pc);
+            int tr   = (j + pc) * lda + (j + pc);
+            int zc   = (j - i) * lda + (j + pc);
 
             /// Panel QR factorization red panel in [Algorithm 1, Wang et al. 2025]
             kernels::dbbr_panel_qr(ws, A + off, ws->Y + off, rows, pc);
 
             /// Update trailing green panel in [Algorithm 1, Wang et al. 2025]
             // W = Y·T
-            cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, pc, &one, ws->Y + off, lda,
-                         ws->Tri, pc, &zero, ws->W + off, lda);
+            cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, pc, &one, ws->Y + off, lda, ws->Tri, pc, &zero,
+                         ws->W + off, lda);
 
             // P = A[off]·W
-            cublas::symm(ws, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, rows, pc, &one, A + tr, lda,
-                         ws->W + off, lda, &zero, ws->Z + zc, lda);
+            cublas::symm(ws, CUBLAS_SIDE_LEFT, CUBLAS_FILL_MODE_LOWER, rows, pc, &one, A + tr, lda, ws->W + off, lda,
+                         &zero, ws->Z + zc, lda);
 
             // Subtract previous panel contribution from P (w = block_cols):
             //   P -= Y[j+b:n, i:i+w]·(Z[j+b:n, 0:w]ᵀ·W) + Z[j+b:n, 0:w]·(Y[j+b:n, i:i+w]ᵀ·W)
-            if (block_cols > 0) {
+            if (block_cols > 0)
+            {
                 // D = Z[j+b:n, 0:w]ᵀ·W
-                cublas::gemm(ws, CUBLAS_OP_T, CUBLAS_OP_N, block_cols, pc, rows, &one,
-                             ws->Z + (j + pc), lda, ws->W + off, lda, &zero, ws->Dwk, block_cols);
+                cublas::gemm(ws, CUBLAS_OP_T, CUBLAS_OP_N, block_cols, pc, rows, &one, ws->Z + (j + pc), lda,
+                             ws->W + off, lda, &zero, ws->Dwk, block_cols);
                 // P -= Y[j+b:n, i:i+w]·D
-                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, block_cols, &neg1,
-                             ws->Y + i * lda + (j + pc), lda, ws->Dwk, block_cols, &one, ws->Z + zc,
-                             lda);
+                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, block_cols, &neg1, ws->Y + i * lda + (j + pc), lda,
+                             ws->Dwk, block_cols, &one, ws->Z + zc, lda);
                 // D = Y[j+b:n, i:i+w]ᵀ·W
-                cublas::gemm(ws, CUBLAS_OP_T, CUBLAS_OP_N, block_cols, pc, rows, &one,
-                             ws->Y + i * lda + (j + pc), lda, ws->W + off, lda, &zero, ws->Dwk,
-                             block_cols);
+                cublas::gemm(ws, CUBLAS_OP_T, CUBLAS_OP_N, block_cols, pc, rows, &one, ws->Y + i * lda + (j + pc), lda,
+                             ws->W + off, lda, &zero, ws->Dwk, block_cols);
                 // P -= Z[j+b:n, 0:w]·D
-                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, block_cols, &neg1,
-                             ws->Z + (j + pc), lda, ws->Dwk, block_cols, &one, ws->Z + zc, lda);
+                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, block_cols, &neg1, ws->Z + (j + pc), lda, ws->Dwk,
+                             block_cols, &one, ws->Z + zc, lda);
             }
 
             // C = Wᵀ·P
-            cublas::gemm(ws, CUBLAS_OP_T, CUBLAS_OP_N, pc, pc, rows, &one, ws->W + off, lda,
-                         ws->Z + zc, lda, &zero, ws->Dwk, pc);
+            cublas::gemm(ws, CUBLAS_OP_T, CUBLAS_OP_N, pc, pc, rows, &one, ws->W + off, lda, ws->Z + zc, lda, &zero,
+                         ws->Dwk, pc);
 
             // Z = P - 0.5·W·C
-            cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, pc, &neg_half, ws->Y + off, lda,
-                         ws->Dwk, pc, &one, ws->Z + zc, lda);
+            cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_N, rows, pc, pc, &neg_half, ws->Y + off, lda, ws->Dwk, pc, &one,
+                         ws->Z + zc, lda);
 
             block_cols += pc;
 
             // green update if next panel is within this block
-            if (j + pc < i + kc) {
+            if (j + pc < i + kc)
+            {
+                // clamp to the matrix edge; a full-pc walk can run past column n-1
+                const int nc = std::min(pc, rows);
                 // A[j+b:n, j+b:j+2b] -= Z[j+b:n, 0:w]·Y[j+b:j+2b, i:i+w]ᵀ
-                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, pc, block_cols, &neg1,
-                             ws->Z + (j + pc), lda, ws->Y + i * lda + (j + pc), lda, &one, A + tr,
-                             lda);
+                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, nc, block_cols, &neg1, ws->Z + (j + pc), lda,
+                             ws->Y + i * lda + (j + pc), lda, &one, A + tr, lda);
                 // A[j+b:n, j+b:j+2b] -= Y[j+b:n, i:i+w]·Z[j+b:j+2b, 0:w]ᵀ
-                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, pc, block_cols, &neg1,
-                             ws->Y + i * lda + (j + pc), lda, ws->Z + (j + pc), lda, &one, A + tr,
-                             lda);
+                cublas::gemm(ws, CUBLAS_OP_N, CUBLAS_OP_T, rows, nc, block_cols, &neg1, ws->Y + i * lda + (j + pc), lda,
+                             ws->Z + (j + pc), lda, &one, A + tr, lda);
             }
         }
 
         // Update trailing green block in [Algorithm 1, Wang et al. 2025]:
         //   A[i+k:n, i+k:n] -= Y[i+k:n, i:i+w]·Z[i+k:n, 0:w]ᵀ + Z[i+k:n, 0:w]·Y[i+k:n, i:i+w]ᵀ
         cublas::syr2k(ws, CUBLAS_FILL_MODE_LOWER, CUBLAS_OP_N, n - (i + kc), block_cols, &neg1,
-                      ws->Y + i * lda + (i + kc), lda, ws->Z + (i + kc), lda, &one,
-                      A + (i + kc) * lda + (i + kc), lda);
+                      ws->Y + i * lda + (i + kc), lda, ws->Z + (i + kc), lda, &one, A + (i + kc) * lda + (i + kc), lda);
     }
 
     // Pack the lower band of the reduced matrix into packed B
     dbbr_pack(ws, A, B, n, b);
 }
 
-// =============================================================================
-// Explicit instantiations
-// =============================================================================
-#define INSTANTIATE(T)                                                                             \
-    template void dbbr_pack<T>(SolverHandle<T> *, const T *, T *, int, int);                       \
-    template void dbbr_panel_qr<T>(SolverHandle<T> *, T *, T *, int, int);                         \
-    template void dbbr_reduce<T>(SolverHandle<T> *, T *, T *);
-INSTANTIATE(float)
-INSTANTIATE(double)
-#undef INSTANTIATE
-
 } // namespace kernels
-} // namespace cuev
+} // namespace ase

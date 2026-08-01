@@ -1,92 +1,123 @@
-# cuEV — CUDA Eigensolver
+# ASE — Accelerated Symmetric Eigensolver
 
-Real symmetric dense eigensolver on NVIDIA GPUs, built to scale to a 2D BLACS
-block-cyclic matrix distributed over MPI + NCCL.
+[![License MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![CUDA](https://img.shields.io/badge/CUDA-12%2B-green.svg)]()
+
+Real symmetric dense eigensolver for a single NVIDIA GPU, double precision.
 
 ```cpp
-cuev::symm_eig_solve<T>(T *A, int n, T *eval, T *evec, cudaStream_t stream);
+ase::AseHandle *ws = ase::handle_alloc(stream);
+ase::solve_ev(ws, A, n, eval, evec);       // host pointers
+ase::handle_free(ws);
 ```
 
-- `A` — n×n real symmetric, column-major, device pointer, overwritten on return.
-- `eval` — eigenvalues ascending, length n.
-- `evec` — eigenvectors as columns (column j = j-th eigenvector), n×n column-major.
+- `A` — n×n real symmetric, column-major, host pointer; only the lower triangle is read.
+  Not modified.
+- `eval` — eigenvalues ascending, length n (host).
+- `evec` — eigenvectors as columns (column j = j-th eigenvector), n×n column-major (host).
+
+Every solve goes through an `AseHandle`, an opaque type owned by the library: `handle_alloc`
+only creates the cuBLAS/cuSOLVER contexts, and the workspace is sized lazily by the first
+`solve_ev`/`solve_ev_d` call and cached across repeated solves of the same dimension — no
+per-call allocation. A `solve_ev_d` overload takes device pointers directly (no H2D/D2H
+copies, and none of the staging memory `solve_ev` needs) for callers who already manage
+device memory. `include/ase/ase.h` is the only installed header and holds the full API.
 
 ## Algorithm
 
 2-stage tridiagonalization EVD:
 
-### 1. Double Blocking Band Reduction (DBBR): Symm → Banded
-* **Mechanism**: Accumulate Householder reflections in compact $WY$ panels to increase arithmetic intensity.
-* **Strategy**: Update the next panel (1st column blocking) and defer the full trailing matrix update until the working index reaches block $k$ (2nd panel blocking).
+1. **Double Blocking Band Reduction (DBBR)** — symmetric dense → banded via compact WY panels.
+2. **Data Repacking** — extract band into packed N×b contiguous array.
+3. **Wavefront Bulge Chasing** — banded → tridiagonal via persistent kernel with point-to-point atomics.
+4. **Divide & Conquer** — tridiagonal eigensolve via LAPACK `*stedc`.
+5. **Back-Transformation** — Q = Q_s · Q_b · Q_d via register-sliding-window kernel + WY-block GEMMs.
 
-### 2. Data Repacking
-* **Mechanism**: Extract the reduced band from the hollowed-out dense matrix.
-* **Strategy**: Move the band into a packed $N \times b$ contiguous array. This eliminates non-contiguous memory accesses, ensuring the entire band fits into the L2 cache for subsequent stages.
+## Requirements
 
-### 3. Wavefront Bulge Chasing: Banded → Tridiagonal
-* **Mechanism**: Launch a persistent CUDA kernel where thread blocks are statically assigned to horizontal band tiles.
-* **Strategy**: Implement a wavefront pipeline where bulges are chased across tiles and passed across thread blocks. Synchronize thread block handoffs with point-to-point atomics (`cuda::atomic_thread_fence`, `wait`/`notify`).
-
-### 4. Divide & Conquer (D&C)
-* **Mechanism**: Tridiagonal eigensolve on the **CPU** via LAPACK `dstedc` (MKL). cuSOLVER exposes no standalone tridiagonal D&C (only dense `syevd`, which re-tridiagonalizes), so it is unusable here; running on the CPU also frees the GPU for the back-transform (stage 5).
-
-### 5. Back-Transformation
-* **Mechanism**: Direct workflow $Q = Q_s \cdot (Q_b \cdot Q_d)$, applied to $Q_d$ in place.
-* **Strategy**: `bc_back` applies $Q_b$ (the bulge-chasing reflectors) to $Q_d$ with a register-resident sliding-window kernel — the reflectors compose to $Q_b^\top$ in forward order, so they are applied in reverse (upward slide) to get $Q_b$. Then `sbr_back` applies $Q_s$ via WY-block GEMMs $(I - W Y^\top)$ per panel. The SC'25 **reordered** scheme (build $Q_s \cdot Q_b$ while CPU D&C runs, then one GEMM $\cdot Q_d$) is a deferred performance layer; the current implementation is synchronous.
-
-
-References: Wang et al., "Improving Tridiagonalization Performance on GPU Architectures"
-(PPoPP'25); Wang et al., "Rethinking Back Transformation in 2-stage EVD" (SC'25).
-
-
-## Distributed Algorithm
-
-### 1. Distributed DBBR: Symm → Banded
-* **Mechanism**: Maintain a 2D Block-Cyclic grid to ensure optimal load balance for the dense trailing matrix update.
-* **Strategy**: Implement Lookahead Pipeline: slice the trailing update to compute the "Lookahead Panel" first. Dispatch it via asynchronous `ncclBroadcast`. While the network handles the transfer and the next process column factorizes, execute the massive bulk `SYR2K` update on the remaining trailing matrix.
-
-### 2. Distributed Data Repacking
-* **Mechanism**: Perform a bulk synchronous `ncclAllToAllv` to extract the band from the 2D grid.
-* **Strategy**: Redistribute the data into a 1D Column-wise Process Grid. This spans the narrow band across all GPUs.
-
-### 3. Distributed Wavefront Bulge Chasing: Banded → Tridiagonal
-* **Mechanism**: Launch one persistent CUDA kernel per GPU on the 1D grid.
-* **Strategy**: Pipeline sweeps across local tiles using point-to-point atomics inside one GPU. Utilize asynchronous `ncclSend`/`ncclRecv` streams to pass boundary bulges directly between GPUs.
-
-### 4. Distributed Divide & Conquer (D&C)
-* **Mechanism**: Gather the tridiagonal matrix to all nodes using `ncclAllGather`.
-* **Strategy**: Execute redundant local LAPACK `dstedc` (CPU) solves on every node to bypass network traffic.
-
-### 5. Distributed Back-Transformation
-* **Mechanism**: Reordered workflow $Q = (Q_s \cdot Q_b) \cdot Q_d$.
-* **Strategy**: Overlap async GPU-stream D&C with the back-transformation of $Q_s$ and $Q_b$.
+- CMake >= 3.25
+- CUDA Toolkit (nvcc + cuBLAS + cuSOLVER)
+- A LAPACK implementation (MKL, OpenBLAS, or generic reference LAPACK)
+- OpenMP (optional — parallelizes the leaf solves in the D&C stage; falls back to serial
+  otherwise)
+- `clang-format` (optional — enables the `format` / `format-check` targets)
+- Doxygen + `dot` (optional — enables the `docs` target)
 
 ## Build
 
 ```bash
-cmake -B build -DCMAKE_CUDA_ARCHITECTURES=80   # single GPU
-cmake --build build
-cmake -B build -DCUEV_ENABLE_MP=ON             # distributed (multi-GPU)
+cmake -S . -B build -DCMAKE_CUDA_ARCHITECTURES=90
+cmake --build build -j
 ```
 
-## Roadmap
+Toolchain (compiler, flags) is selected the usual CMake way via cache variables or
+environment: `CUDACXX`, `CUDAFLAGS`, `CXXFLAGS`, `CUDAHOSTCXX`.
 
-| Phase | Goal | Status |
+The LAPACK implementation is selected with `-DBLA_VENDOR=<...>` (passed through to
+CMake's `FindLAPACK`), e.g. `Intel10_64lp` / `Intel10_64lp_seq` for MKL, `OpenBLAS`, or
+`Generic`.
+
+### Options
+
+| Option | Default | Description |
 |---|---|---|
-| 1 | Single-GPU reference (DBBR + GPU-BC + back-transform) | in progress |
-| 2 | Distributed 2D block-cyclic (cuBLASMp / cuSOLVERMp / NCCL) | planned |
+| `ASE_BUILD_TESTS` | `ON` | Build the test binary (`ase_test`) |
+| `ASE_BUILD_BENCH` | `ON` | Build the benchmark binary (`ase_bench`) |
+| `ASE_BUILD_DOCS` | `OFF` | Add the Doxygen `docs` target |
+| `ASE_WITH_OPENMP` | `ON` | Use OpenMP for the D&C solver |
+| `BUILD_SHARED_LIBS` | `ON` | Build `ase` as a shared library (`OFF` for static) |
+| `CMAKE_CUDA_ARCHITECTURES` | `90` | Target GPU compute capability, e.g. `80` for A100 |
+| `CMAKE_BUILD_TYPE` | `Release` | Standard CMake build type |
+| `BLA_VENDOR` | — | LAPACK vendor for `FindLAPACK`, e.g. `Intel10_64lp_seq`, `OpenBLAS` |
 
-### Stage status (Phase 1)
+Example — MKL, Hopper, static library:
 
-- [x] **1 DBBR** (full → band) — complete, tested (eigenvalues vs cuSOLVER), benchmarked
-- [x] **2 Data repacking** (`bc_pack` / `dbbr_pack`) — complete
-- [x] **3 Bulge chasing** (`bc_chase`) — complete, tested (spectrum vs cuSOLVER)
-- [x] **4 D&C** (LAPACK `*stedc`, MKL) — functional on CPU; dominates wall time at large n, to be optimized
-- [x] **5 Back-transform** (`bc_back` + `sbr_back`) — complete, tested (full residual + stage isolation)
+```bash
+cmake -S . -B build \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CUDA_ARCHITECTURES=90 \
+  -DBLA_VENDOR=Intel10_64lp_seq \
+  -DBUILD_SHARED_LIBS=OFF
 
-The full solve is correct end-to-end (n=16000 fp64: relative residual ~2e-14, eigenvectors ~7e-14
-vs cuSOLVER). GPU stages are competitive; CPU `*stedc` is the remaining wall-time bottleneck.
+cmake --build build -j
+```
 
-DBBR on A100 80GB (fp64, b=64, k=512): ~9.9 TFLOP/s at n=32k (~1.15× over single-blocked SBR;
-the bigger DBBR win is a ≥49k phenomenon). Profile levers for later: per-block square companion
-(`symm` ~34%), custom panel QR (cuSOLVER `geqrf` ~26%), custom `dbbr_syr2k` (~18%).
+See `build.sh` for the environment used on the racklettes cluster (Kez-provided CUDA and
+MKL via `CUDACXX` / `MKLROOT`).
+
+## Tests
+
+```bash
+cmake --build build --target ase_test
+./build/ase_test
+```
+
+or via CTest: `ctest --test-dir build`.
+
+## Benchmarks
+
+```bash
+cmake --build build --target ase_bench
+./build/ase_bench
+```
+
+## Documentation
+
+```bash
+cmake -S . -B build -DASE_BUILD_DOCS=ON
+cmake --build build --target docs
+```
+
+Requires the `doxygen/` submodule (doxygen-awesome-css theme) for styled output:
+`git submodule update --init`. Output is written to `docs/html`.
+
+## References
+
+- J. J. M. Cuppen, "A divide and conquer method for the symmetric tridiagonal eigenproblem," *Numerische Mathematik*, vol. 36, no. 2, pp. 177-195, 1980.
+- C. Bischof and C. Van Loan, "The WY representation for products of Householder matrices," *SIAM Journal on Scientific and Statistical Computing*, vol. 8, no. 1, pp. s2-s13, 1987.
+- H. Wang, S. Wu, Z. Duan, and S. Zheng, "Improving Tridiagonalization Performance on GPU Architectures," *Proceedings of the ACM SIGPLAN Annual Symposium on Principles and Practice of Parallel Programming (PPoPP)*, 2025.
+- H. Wang et al., "Rethinking Back Transformation in 2-stage EVD," *Proceedings of the International Conference for High Performance Computing, Networking, Storage and Analysis (SC)*, 2025.
+
+## License
+
+MIT — see [LICENSE](LICENSE).
