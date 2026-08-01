@@ -245,7 +245,6 @@ void bc_back_launch(AseHandle* ws, const double* U, double* M)
     const size_t shmem = ((size_t)UTILE * WIN + 2 * (size_t)WARPS * NC * UTILE) * sizeof(double);
     CUDA_CHECK(cudaFuncSetAttribute(bc_back_kernel<PT, UTILE, WARPS, NC>, cudaFuncAttributeMaxDynamicSharedMemorySize,
                                     (int)shmem));
-
     int blocksPerSM = 0, numSM = 0;
     CUDA_CHECK(cudaOccupancyMaxActiveBlocksPerMultiprocessor(&blocksPerSM, bc_back_kernel<PT, UTILE, WARPS, NC>,
                                                              32 * WARPS, shmem));
@@ -263,7 +262,10 @@ void bc_back_launch(AseHandle* ws, const double* U, double* M)
 
 // BC-Back: M ← Q_b · M, in place on the padded buffer M (ldu×n, padding rows zeroed).
 // Geometry tuned on A100-80GB (fp64): PT=8, UTILE=64, 16 warps, 2 cols/warp.
-void bc_back(AseHandle* ws, const double* U, double* M) { bc_back_launch<BC_BACK_PT, 64, 16, 2>(ws, U, M); }
+void bc_back(AseHandle* ws, const double* U, double* M)
+{
+    bc_back_launch<BC_BACK_PT, 64, 16, 2>(ws, U, M);
+}
 
 /// SBR-Back: M ← Q_s · M, in place. M is n×n (ld=ldm); WY panels applied in reverse order.
 void sbr_back(AseHandle* ws, const double* Y, const double* W, double* M)
